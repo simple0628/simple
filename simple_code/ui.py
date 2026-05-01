@@ -5,9 +5,6 @@ import re
 import time
 import threading
 import queue
-
-HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".simple-code", "history.txt")
-MAX_HISTORY = 50
 from textual.app import App, ComposeResult
 from textual.widgets import Static, Input, OptionList
 from textual.containers import Vertical, Horizontal, VerticalScroll
@@ -20,6 +17,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.box import Box
 
+HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".simple-code", "history.txt")
+MAX_HISTORY = 50
 
 # 自定义 Box：只显示左侧竖线
 _LEFT_BAR_BOX = Box(
@@ -191,7 +190,6 @@ class SimpleApp(App):
         self._last_stream_time = 0.0
         self._inline_event = None
         self._inline_result = None
-        self._last_paste_time = 0.0
         self._mount_queue = queue.Queue()
         self._update_queue = queue.Queue()
         self._current_tool_widget = None
@@ -206,7 +204,6 @@ class SimpleApp(App):
         self._history_draft = ""
         # 粘贴
         self._paste_content = None
-        self._paste_fallback = None
         self.version = ""
         self.cwd = ""
         self.has_memory = False
@@ -500,7 +497,7 @@ class SimpleApp(App):
             self._inline_event.set()
 
     def action_smart_paste(self):
-        """Ctrl+V 兜底"""
+        """Ctrl+V / F5：从剪贴板读取"""
         try:
             import pyperclip
             content = pyperclip.paste()
@@ -509,15 +506,7 @@ class SimpleApp(App):
         except Exception:
             pass
 
-    def action_force_paste(self):
-        """F5：从剪贴板读取完整内容"""
-        try:
-            import pyperclip
-            content = pyperclip.paste()
-            if content:
-                self._handle_paste_content(content)
-        except Exception:
-            pass
+    action_force_paste = action_smart_paste
 
     def _handle_paste_content(self, content):
         """统一处理粘贴内容：短内容进输入框，长内容显示摘要"""
@@ -535,15 +524,6 @@ class SimpleApp(App):
             summary = f"[已粘贴 ~{lines} 行] "
             inp.value = summary
             inp.cursor_position = len(summary)
-
-    @staticmethod
-    def _read_clipboard():
-        """读取剪贴板文本"""
-        try:
-            import pyperclip
-            return pyperclip.paste()
-        except Exception:
-            return ""
 
     def action_quit_app(self):
         now = time.time()
@@ -703,8 +683,6 @@ class SimpleApp(App):
             except Exception:
                 self._enqueue_update(self._streaming_widget, Markdown(final_text))
         self._streaming_widget = None
-
-    # --- 交互式工具支持 ---
 
     # --- PPT 预览 ---
 
