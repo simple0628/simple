@@ -35,12 +35,14 @@ def build_system_prompt(cwd, platform):
 4. 写完代码后主动用 run_command 运行验证
 5. 当用户需求不明确时，必须使用 ask_user 工具向用户提问，不要用普通文字回复来提问
 6. 自定义 Skill 存放在 ~/.simple-code/skills/ 目录下，每个 .md 文件就是一个 skill。用户可以通过 create_skill 工具创建新 skill，也可以用 read_file 读取该目录查看已有的 skill
-7. 创建 PPT 时，必须且只能使用 create_ppt 工具，禁止用 write_file 写 Python 脚本或其他方式生成 PPT。流程：
-   - 第一步：调用 ppt_frameworks 工具查看可用的设计框架，根据用户需求选择最合适的
-   - 第二步：调用 create_ppt 工具，传入选好的 framework 参数和 slides 内容
-   - 结构完整：必须有封面(title)、章节分隔(section)、内容页(content)、结尾页(title)
-   - 内容充实：每页 content 至少 3-5 条要点，每条要点要有具体内容
-   - 页数充足：一般不少于 8 页，重要主题应有 12-15 页
+7. 创建 PPT 时，必须且只能使用 create_ppt 工具，禁止用 write_file 写脚本。流程：
+   - 先通过对话了解清楚：主题、是否有资料、页数、风格偏好
+   - 如果用户有资料，先用 read_file 读取，或用 read_clipboard 读剪贴板
+   - 信息收集完毕后，调用 create_ppt 工具，传入每页的 title、bullets、notes
+   - 结构完整：必须有封面、内容页、结尾页
+   - 内容充实：每页至少 3-5 条要点
+   - 演讲稿：每页 notes 写 3-5 句口语化演讲稿
+   - 页数：一般不少于 6 页
 """
 
 

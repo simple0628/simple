@@ -70,7 +70,6 @@ def main():
             app.write_system("命令:")
             app.write_system("  /指南   显示帮助")
             app.write_system("  /模型   管理模型密钥")
-            app.write_system("  /ppt    进入 PPT 制作模式")
             app.write_system("  /清空   清空对话历史")
             if skills:
                 app.write_system("")
@@ -92,11 +91,6 @@ def main():
 
         if cmd == "/模型":
             _handle_model_command()
-            return
-
-        if cmd == "/ppt":
-            from simple_code.ppt_mode import start as ppt_start
-            ppt_start(app, client, model_name)
             return
 
         if cmd == "/重置":
