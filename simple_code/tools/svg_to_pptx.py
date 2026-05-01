@@ -249,18 +249,28 @@ def _path_geom_xml(d_attr):
 #  主转换器
 # ============================================================
 
+# Chrome ID 关键词 — 这些元素不参与动画
+_CHROME_TOKENS = {'background', 'bg', 'decoration', 'decorations', 'decor',
+                  'header', 'footer', 'chrome', 'watermark', 'pagenumber', 'pagenum'}
+
+def _is_chrome_id(svg_id):
+    if not svg_id: return False
+    lower = svg_id.lower().replace("-", "").replace("_", "")
+    return any(token in lower for token in _CHROME_TOKENS)
+
+
 class SvgConverter:
     def __init__(self):
         self.gradients = {}
+        self.anim_targets = []  # [(shape_id, svg_id), ...]
 
     def convert(self, slide, svg_str):
-        # 修复常见 SVG 问题
-        svg_str = svg_str.replace("&", "&amp;").replace("&amp;amp;", "&amp;").replace("&amp;#", "&#")
+        """转换 SVG → slide 形状，返回 anim_targets"""
         root = etree.fromstring(svg_str.encode("utf-8"))
         self._collect_defs(root)
-        # 找到 slide 的 spTree
         sp_tree = slide._element.find(f".//{qn('p:spTree')}")
-        self._walk(sp_tree, root, 0, 0, 1, 1)
+        self._walk(sp_tree, root, 0, 0, 1, 1, depth=0)
+        return self.anim_targets
 
     def _collect_defs(self, root):
         for elem in root.iter():
@@ -317,7 +327,7 @@ class SvgConverter:
         opacity = parse_num(get_attr(elem, "stroke-opacity", "1"))
         return _line_xml(color, w, opacity)
 
-    def _walk(self, sp_tree, elem, tx, ty, sx, sy):
+    def _walk(self, sp_tree, elem, tx, ty, sx, sy, depth=0):
         for child in elem:
             tag = self._tag(child)
             ctxt = parse_transform(child.get("transform"))
@@ -333,9 +343,20 @@ class SvgConverter:
                 elif tag == "text": self._text(sp_tree, child, ntx, nty, nsx, nsy)
                 elif tag == "path": self._path(sp_tree, child, ntx, nty, nsx, nsy)
                 elif tag == "polygon": self._polygon(sp_tree, child, ntx, nty, nsx, nsy)
-                elif tag in ("g", "svg"): self._walk(sp_tree, child, ntx, nty, nsx, nsy)
+                elif tag in ("g", "svg"):
+                    svg_id = child.get("id")
+                    # 记录顶层非 chrome 组为动画目标
+                    if depth == 0 and svg_id and not _is_chrome_id(svg_id):
+                        # 记录下一个将分配的 shape_id
+                        next_shape_id = _shape_id_counter + 1
+                        self._walk(sp_tree, child, ntx, nty, nsx, nsy, depth + 1)
+                        # 如果有新形状被添加，记录为动画目标
+                        if _shape_id_counter >= next_shape_id:
+                            self.anim_targets.append((next_shape_id, svg_id))
+                    else:
+                        self._walk(sp_tree, child, ntx, nty, nsx, nsy, depth + 1)
             except Exception:
-                pass  # 跳过无法转换的元素
+                pass
 
     # --- 形状转换 ---
 
@@ -480,15 +501,154 @@ class SvgConverter:
 
 
 # ============================================================
+#  动画 & 转场 XML 生成（参考 ppt-master）
+# ============================================================
+
+from simple_code.tools.ppt_frameworks import ENTRANCE_ANIMATIONS, ENTRANCE_MIXED_POOL, TRANSITIONS
+
+
+def _pick_effect(mode, idx, offset=0):
+    """解析动画模式 → 具体效果名"""
+    if mode in ENTRANCE_ANIMATIONS: return mode
+    if mode == "mixed":
+        return "fade" if idx == 0 else ENTRANCE_MIXED_POOL[(idx - 1 + offset) % len(ENTRANCE_MIXED_POOL)]
+    if mode == "random":
+        import random
+        return random.choice(ENTRANCE_MIXED_POOL)
+    return "fade"
+
+
+def _build_effect_xml(anim_name, shape_id, dur_ms, set_id, eff_id):
+    """单个元素的动画效果 XML"""
+    info = ENTRANCE_ANIMATIONS.get(anim_name, ENTRANCE_ANIMATIONS["fade"])
+    set_block = (
+        f'<p:set><p:cBhvr><p:cTn id="{set_id}" dur="1" fill="hold">'
+        f'<p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>'
+        f'<p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl>'
+        f'<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst>'
+        f'</p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>'
+    )
+    if info["filter"]:
+        return (set_block +
+                f'<p:animEffect transition="in" filter="{info["filter"]}">'
+                f'<p:cBhvr><p:cTn id="{eff_id}" dur="{dur_ms}"/>'
+                f'<p:tgtEl><p:spTgt spid="{shape_id}"/></p:tgtEl>'
+                f'</p:cBhvr></p:animEffect>')
+    return set_block
+
+
+def _build_sequence_timing_xml(targets, duration=0.4, stagger=0.5, trigger="after-previous"):
+    """多元素序列动画 timing XML（与 ppt-master create_sequence_timing_xml 一致）"""
+    if not targets: return ""
+    dur_ms = int(duration * 1000)
+    stagger_ms = int(stagger * 1000)
+    next_id = 3
+
+    # after-previous 模式（默认，自动播放）
+    elapsed_ms = 0
+    inner_steps = []
+    for i, (shape_id, delay_ms, anim_name) in enumerate(targets):
+        if i > 0: elapsed_ms += dur_ms + delay_ms
+        wrapper_id = next_id; leaf_id = next_id + 1
+        set_id = next_id + 2; eff_id = next_id + 3
+        next_id += 4
+        effect = _build_effect_xml(anim_name, shape_id, dur_ms, set_id, eff_id)
+        preset_id = ENTRANCE_ANIMATIONS.get(anim_name, ENTRANCE_ANIMATIONS["fade"])["presetID"]
+        preset_sub = ENTRANCE_ANIMATIONS.get(anim_name, ENTRANCE_ANIMATIONS["fade"])["presetSub"]
+        inner_steps.append(
+            f'<p:par><p:cTn id="{wrapper_id}" fill="hold">'
+            f'<p:stCondLst><p:cond delay="{elapsed_ms}"/></p:stCondLst>'
+            f'<p:childTnLst><p:par>'
+            f'<p:cTn id="{leaf_id}" presetID="{preset_id}" presetClass="entr" '
+            f'presetSubtype="{preset_sub}" fill="hold" nodeType="afterEffect">'
+            f'<p:stCondLst><p:cond delay="0"/></p:stCondLst>'
+            f'<p:childTnLst>{effect}</p:childTnLst>'
+            f'</p:cTn></p:par></p:childTnLst></p:cTn></p:par>'
+        )
+
+    outer_id = next_id
+    all_steps = (
+        f'<p:par><p:cTn id="{outer_id}" fill="hold">'
+        f'<p:stCondLst><p:cond delay="indefinite"/>'
+        f'<p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst>'
+        f'<p:childTnLst>{"".join(inner_steps)}</p:childTnLst>'
+        f'</p:cTn></p:par>'
+    )
+
+    bld_list = "".join(f'<p:bldP spid="{sid}" grpId="0"/>' for sid, _, _ in targets)
+
+    return (
+        f'<p:timing xmlns:p="{NS_P}" xmlns:a="{NS_A}">'
+        f'<p:tnLst><p:par>'
+        f'<p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>'
+        f'<p:seq concurrent="1" nextAc="seek">'
+        f'<p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>'
+        f'{all_steps}'
+        f'</p:childTnLst></p:cTn>'
+        f'<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>'
+        f'<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst>'
+        f'</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>'
+        f'<p:bldLst>{bld_list}</p:bldLst>'
+        f'</p:timing>'
+    )
+
+
+def _build_transition_xml(effect="fade", duration_ms=500):
+    """转场 XML"""
+    tr = TRANSITIONS.get(effect)
+    if not tr or not tr.get("element"): return ""
+    elem = tr["element"]
+    attrs = " ".join(f'{k}="{v}"' for k, v in tr.get("attrs", {}).items())
+    if attrs: attrs = " " + attrs
+    ns14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+    return (f'<p:transition xmlns:p="{NS_P}" xmlns:p14="{ns14}" '
+            f'p14:dur="{duration_ms}" advClick="1"><p:{elem}{attrs}/></p:transition>')
+
+
+# ============================================================
 #  公开 API
 # ============================================================
 
+def _repair_svg(svg_str):
+    """修复 DeepSeek 生成的常见 SVG 语法问题"""
+    # 修复 & 符号
+    svg_str = svg_str.replace("&", "&amp;").replace("&amp;amp;", "&amp;").replace("&amp;#", "&#")
+
+    # 确保有 </svg> 结尾
+    if "</svg>" not in svg_str:
+        svg_str += "</svg>"
+
+    # 修复未关闭的标签（内层先关闭：tspan → text → g）
+    for tag in ["tspan", "text", "defs", "g"]:
+        opened = len(re.findall(rf"<{tag}[\s>]", svg_str))
+        closed = svg_str.count(f"</{tag}>")
+        if opened > closed:
+            svg_str = svg_str.replace("</svg>", f"</{tag}>" * (opened - closed) + "</svg>")
+
+    return svg_str
+
+
 def svg_to_slide(slide, svg_str):
+    """转换 SVG → slide 形状，返回 anim_targets"""
+    svg_str = _repair_svg(svg_str)
     converter = SvgConverter()
-    converter.convert(slide, svg_str)
+    return converter.convert(slide, svg_str)
 
 
-def svgs_to_pptx(svg_list, output_path):
+def svgs_to_pptx(pages, output_path, default_animation="mixed", default_transition="fade",
+                 stagger=0.5, duration=0.4):
+    """将多个页面转换为 PPTX（含动画、转场、演讲稿）
+
+    Args:
+        pages: 页面列表，每项可以是：
+            - 纯 SVG 字符串
+            - dict: {"svg": "...", "animation": "mixed", "transition": "fade", "notes": "演讲稿"}
+        output_path: 输出文件路径
+        default_animation: 默认入场动画
+        default_transition: 默认转场效果
+        stagger: 元素间动画间隔（秒）
+        duration: 单个动画持续时间（秒）
+    """
     global _shape_id_counter
     _shape_id_counter = 100
 
@@ -496,16 +656,60 @@ def svgs_to_pptx(svg_list, output_path):
     prs.slide_width = Emu(px(1280))
     prs.slide_height = Emu(px(720))
     blank = prs.slide_layouts[6]
+    mixed_offset = 0
 
-    for i, svg_str in enumerate(svg_list):
+    for i, page in enumerate(pages):
+        # 解析页面数据
+        if isinstance(page, dict):
+            svg_str = page.get("svg", "")
+            animation = page.get("animation", default_animation)
+            transition = page.get("transition", default_transition)
+            notes = page.get("notes", "")
+        else:
+            svg_str = page
+            animation = default_animation
+            transition = default_transition
+            notes = ""
+
         slide = prs.slides.add_slide(blank)
+        anim_targets = []
+
         try:
-            svg_to_slide(slide, svg_str)
+            anim_targets = svg_to_slide(slide, svg_str)
         except Exception as e:
             sp_tree = slide._element.find(f".//{qn('p:spTree')}")
             err_xml = _text_shape_xml(_next_id(), px(60), px(300), px(1160), px(100),
                                       _run_xml(f"Page {i+1} error: {str(e)[:80]}", 16), "l")
             sp_tree.append(etree.fromstring(err_xml))
 
+        sld = slide._element
+
+        # 1. 演讲稿 → speaker notes
+        if notes:
+            notes_slide = slide.notes_slide
+            notes_slide.notes_text_frame.text = notes
+
+        # 2. 转场（必须在 timing 之前）
+        if transition and transition != "none":
+            tr_info = TRANSITIONS.get(transition, TRANSITIONS.get("fade"))
+            if tr_info:
+                tr_xml = _build_transition_xml(transition, tr_info["duration_ms"])
+                if tr_xml:
+                    sld.append(etree.fromstring(tr_xml))
+
+        # 3. 入场动画
+        if animation and animation != "none" and anim_targets:
+            stagger_ms = int(stagger * 1000)
+            seq_targets = []
+            for idx, (sid, svg_id) in enumerate(anim_targets):
+                effect = _pick_effect(animation, idx, mixed_offset)
+                delay = 0 if idx == 0 else stagger_ms
+                seq_targets.append((sid, delay, effect))
+            mixed_offset += max(0, len(anim_targets) - 1)
+
+            timing_xml = _build_sequence_timing_xml(seq_targets, duration, stagger)
+            if timing_xml:
+                sld.append(etree.fromstring(timing_xml))
+
     prs.save(output_path)
-    return len(svg_list)
+    return len(pages)
