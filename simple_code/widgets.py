@@ -103,15 +103,18 @@ class StatusIndicator(Static):
 
 
 class PasteInput(Input):
-    """自定义输入框：拦截粘贴事件，用 pyperclip 读完整剪贴板"""
+    """自定义输入框：拦截粘贴，支持拖拽文件路径 + 剪贴板读取"""
 
     def _on_paste(self, event) -> None:
         event.stop()
         event.prevent_default()
-        try:
-            import pyperclip
-            content = pyperclip.paste()
-        except Exception:
-            content = event.text or ""
+        # 优先用 event.text（拖拽文件路径在这里），为空时再读剪贴板
+        content = event.text or ""
+        if not content:
+            try:
+                import pyperclip
+                content = pyperclip.paste()
+            except Exception:
+                pass
         if content:
             self.app._handle_paste_content(content)

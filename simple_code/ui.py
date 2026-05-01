@@ -139,7 +139,6 @@ class SimpleApp(App):
         Binding("ctrl+c", "copy_or_quit", "复制/退出", show=False),
         Binding("tab", "complete_slash", "补全", show=False),
         Binding("ctrl+v", "smart_paste", "粘贴", show=False, priority=True),
-        Binding("f5", "force_paste", "粘贴剪贴板", show=False, priority=True),
         Binding("pageup", "scroll_up_page", "上翻", show=False),
         Binding("pagedown", "scroll_down_page", "下翻", show=False),
     ]
@@ -184,7 +183,7 @@ class SimpleApp(App):
                 yield Static("", id="status-right")
             with Horizontal(id="input-area"):
                 yield Static("> ", id="input-prompt")
-                yield PasteInput(placeholder="输入消息...  Ctrl+V 粘贴 · F5 粘贴长文本", id="input-field")
+                yield PasteInput(placeholder="输入消息...", id="input-field")
 
     def on_mount(self):
         self._chat_view = self.query_one("#chat-view", VerticalScroll)
@@ -458,7 +457,6 @@ class SimpleApp(App):
         except Exception:
             pass
 
-    action_force_paste = action_smart_paste
 
     def _handle_paste_content(self, content):
         inp = self.query_one("#input-field", Input)
