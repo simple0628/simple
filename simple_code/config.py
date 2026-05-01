@@ -1,8 +1,7 @@
-"""配置管理：多模型供应商、API Key 管理、首次引导"""
+"""配置管理：API Key、首次引导、Skill 加载"""
 
 import os
 import json
-import sys
 import getpass
 
 from openai import OpenAI
@@ -15,7 +14,7 @@ CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".simple-code")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 SKILLS_DIR = os.path.join(CONFIG_DIR, "skills")
 
-# --- 供应商定义 ---
+# --- 模型定义 ---
 
 PROVIDERS = {
     "deepseek": {
@@ -82,7 +81,7 @@ def save_config(config):
 
 
 def _migrate_old_config(config):
-    """兼容旧格式：{"api_key": "xxx"} → 新的多供应商格式"""
+    """兼容旧格式：{"api_key": "xxx"} → providers 格式"""
     if "api_key" in config and "providers" not in config:
         new_config = {
             "current": "deepseek",
@@ -95,10 +94,10 @@ def _migrate_old_config(config):
     return config
 
 
-# --- 供应商管理 ---
+# --- API Key 管理 ---
 
 def get_provider():
-    """获取当前供应商完整信息，返回 dict"""
+    """获取当前模型配置，返回 dict"""
     config = _migrate_old_config(load_config())
     current_id = config.get("current", "deepseek")
     if current_id not in PROVIDERS:
@@ -119,7 +118,7 @@ def get_provider():
 
 
 def set_provider_key(provider_id, api_key):
-    """设置指定供应商的 API Key"""
+    """设置 API Key"""
     config = _migrate_old_config(load_config())
     if "providers" not in config:
         config["providers"] = {}
@@ -129,21 +128,8 @@ def set_provider_key(provider_id, api_key):
     save_config(config)
 
 
-def switch_provider(provider_id):
-    """切换当前供应商"""
-    config = _migrate_old_config(load_config())
-    config["current"] = provider_id
-    save_config(config)
-
-
-def get_provider_key(provider_id):
-    """获取指定供应商的 API Key"""
-    config = _migrate_old_config(load_config())
-    return config.get("providers", {}).get(provider_id, {}).get("api_key", "")
-
-
 def test_provider_key(provider_id, api_key):
-    """测试指定供应商的 API Key 是否可用"""
+    """测试 API Key 是否可用"""
     if provider_id not in PROVIDERS:
         return False
     info = PROVIDERS[provider_id]
@@ -161,11 +147,6 @@ def test_provider_key(provider_id, api_key):
 
 # --- 首次启动 ---
 
-def _test_api_key(api_key):
-    """测试 DeepSeek API Key（向后兼容）"""
-    return test_provider_key("deepseek", api_key)
-
-
 def _input_and_verify_key(prompt_text="  请输入你的 API Key: "):
     """输入 API Key 并验证连通性，失败则重试"""
     while True:
@@ -175,7 +156,7 @@ def _input_and_verify_key(prompt_text="  请输入你的 API Key: "):
             continue
 
         console.print("[dim]  正在验证...[/dim]", end="")
-        if _test_api_key(api_key):
+        if test_provider_key("deepseek", api_key):
             console.print("\r[green]  验证通过！  [/green]")
             return api_key
         else:
@@ -198,28 +179,6 @@ def first_run_setup():
     })
     console.print()
     return api_key
-
-
-def get_api_key():
-    """获取 API Key，首次使用时引导配置"""
-    config = _migrate_old_config(load_config())
-    providers = config.get("providers", {})
-    current = config.get("current", "deepseek")
-    api_key = providers.get(current, {}).get("api_key", "")
-    if api_key:
-        return api_key
-    return first_run_setup()
-
-
-def reset_config():
-    """重置配置，重新输入 API Key"""
-    console.print("[yellow]重新配置 API Key[/yellow]")
-    console.print("[dim]你可以在 https://platform.deepseek.com/api_keys 获取 API Key[/dim]")
-    console.print()
-
-    api_key = _input_and_verify_key("  请输入新的 API Key: ")
-    set_provider_key("deepseek", api_key)
-    console.print()
 
 
 # --- Skill 管理 ---

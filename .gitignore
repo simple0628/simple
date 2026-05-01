@@ -7,3 +7,4 @@ build/
 .eggs/
 opencode/
 .claude/
+simple/

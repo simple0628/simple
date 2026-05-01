@@ -12,7 +12,7 @@ from openai import OpenAI
 
 from simple_code import __version__
 from simple_code.config import (
-    get_provider, set_provider_key, get_provider_key,
+    get_provider, set_provider_key,
     test_provider_key, load_skills, SKILLS_DIR
 )
 from simple_code.chat import build_system_prompt, chat_round, save_memory
@@ -21,7 +21,7 @@ from simple_code import state
 
 
 def main():
-    # 获取当前供应商配置
+    # 获取模型配置
     provider = get_provider()
     if not provider["api_key"]:
         # 首次使用，引导配置
