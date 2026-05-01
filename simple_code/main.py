@@ -2,6 +2,7 @@
 
 import sys
 import os
+import re
 import time
 import threading
 
@@ -69,6 +70,7 @@ def main():
             app.write_system("命令:")
             app.write_system("  /指南   显示帮助")
             app.write_system("  /模型   管理模型密钥")
+            app.write_system("  /ppt    进入 PPT 制作模式")
             app.write_system("  /清空   清空对话历史")
             if skills:
                 app.write_system("")
@@ -91,6 +93,11 @@ def main():
 
         if cmd == "/模型":
             _handle_model_command()
+            return
+
+        if cmd == "/ppt":
+            from simple_code.ppt_mode import start as ppt_start
+            ppt_start(app, client, model_name)
             return
 
         if cmd == "/重置":
@@ -120,6 +127,9 @@ def main():
                 app.write_warning(f"未知命令: /{skill_name}")
                 app.write_system("输入 /指南 查看可用命令")
                 return
+
+        # --- 文件路径检测（拖拽文件自动处理）---
+        user_input = _process_file_paths(user_input, app)
 
         # --- 正常对话 ---
         app.write_user(user_input)
@@ -194,6 +204,125 @@ def main():
             kernel32 = ctypes.windll.kernel32
             stdin_handle = kernel32.GetStdHandle(-10)
             kernel32.SetConsoleMode(stdin_handle, 0x0007)
+
+
+def _process_file_paths(user_input, app):
+    """检测输入中的文件路径（拖拽产生），自动读取内容附加到消息中。"""
+    # 提取带引号的路径或整行路径
+    path_pattern = r'"([^"]+)"|\'([^\']+)\''
+    matches = re.findall(path_pattern, user_input)
+    candidates = [m[0] or m[1] for m in matches]
+
+    # 如果没有引号包裹的路径，尝试整行作为路径
+    if not candidates:
+        stripped = user_input.strip().strip('"').strip("'")
+        if os.path.exists(stripped):
+            candidates = [stripped]
+
+    if not candidates:
+        return user_input
+
+    file_contents = []
+    remaining_text = user_input
+
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+
+        # 从用户输入中移除路径（包括引号）
+        remaining_text = remaining_text.replace(f'"{path}"', '').replace(f"'{path}'", '').replace(path, '')
+        filename = os.path.basename(path)
+        ext = os.path.splitext(path)[1].lower()
+
+        if os.path.isdir(path):
+            # 文件夹：列出结构
+            try:
+                entries = os.listdir(path)[:50]
+                tree = "\n".join(f"  {e}" for e in entries)
+                file_contents.append(f"[文件夹: {path}]\n{tree}")
+                app.write_system(f"已读取文件夹: {filename}/")
+            except Exception as e:
+                file_contents.append(f"[文件夹读取失败: {path}] {e}")
+
+        elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.webp'):
+            # 图片：OCR 识别
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                ocr = RapidOCR()
+                result, _ = ocr(path)
+                if result:
+                    text = "\n".join(line[1] for line in result)
+                    file_contents.append(f"[图片 OCR: {filename}]\n{text}")
+                else:
+                    file_contents.append(f"[图片: {filename}]（OCR 未识别到文字）")
+                app.write_system(f"已 OCR 识别: {filename}")
+            except Exception as e:
+                file_contents.append(f"[图片读取失败: {filename}] {e}")
+
+        elif ext == '.pdf':
+            # PDF
+            try:
+                import pdfplumber
+                text_parts = []
+                with pdfplumber.open(path) as pdf:
+                    for page in pdf.pages[:20]:
+                        t = page.extract_text()
+                        if t:
+                            text_parts.append(t)
+                file_contents.append(f"[PDF: {filename}]\n" + "\n".join(text_parts))
+                app.write_system(f"已读取: {filename}")
+            except Exception as e:
+                file_contents.append(f"[PDF 读取失败: {filename}] {e}")
+
+        elif ext == '.docx':
+            # Word 文档
+            try:
+                from docx import Document
+                doc = Document(path)
+                text = "\n".join(p.text for p in doc.paragraphs if p.text)
+                file_contents.append(f"[Word: {filename}]\n{text}")
+                app.write_system(f"已读取: {filename}")
+            except Exception as e:
+                file_contents.append(f"[Word 读取失败: {filename}] {e}")
+
+        elif ext == '.pptx':
+            # PPT
+            try:
+                from pptx import Presentation
+                prs = Presentation(path)
+                slides_text = []
+                for i, slide in enumerate(prs.slides, 1):
+                    texts = []
+                    for shape in slide.shapes:
+                        if shape.has_text_frame:
+                            texts.append(shape.text_frame.text)
+                    if texts:
+                        slides_text.append(f"第{i}页: " + " | ".join(texts))
+                file_contents.append(f"[PPT: {filename}]\n" + "\n".join(slides_text))
+                app.write_system(f"已读取: {filename}")
+            except Exception as e:
+                file_contents.append(f"[PPT 读取失败: {filename}] {e}")
+
+        else:
+            # 其他文本文件
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read(50000)
+                file_contents.append(f"[文件: {filename}]\n{content}")
+                app.write_system(f"已读取: {filename}")
+            except Exception as e:
+                file_contents.append(f"[文件读取失败: {filename}] {e}")
+
+    if not file_contents:
+        return user_input
+
+    # 组合：用户附加文字 + 文件内容
+    remaining_text = remaining_text.strip()
+    parts = []
+    if remaining_text:
+        parts.append(remaining_text)
+    parts.extend(file_contents)
+    return "\n\n".join(parts)
 
 
 if __name__ == "__main__":
