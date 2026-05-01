@@ -6,94 +6,19 @@ import time
 import threading
 import queue
 from textual.app import App, ComposeResult
-from textual.widgets import Static as _BaseStatic, Input, OptionList
+from textual.widgets import Input, OptionList
 from textual.containers import Vertical, Horizontal, VerticalScroll
-from textual.reactive import reactive
 from textual.binding import Binding
-from textual.strip import Strip
-from textual.content import Content
 from textual import work
 from rich.text import Text
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.box import Box
-from rich.segment import Segment
-from rich.style import Style as RichStyle
+
+from simple_code.widgets import Static, StatusIndicator, PasteInput
 
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".simple-code", "history.txt")
-
-
-_SEL_STYLE = RichStyle(bgcolor="dark_cyan")
-
-
-class SelectableStatic(_BaseStatic):
-    """支持文字选中的 Static widget（含 Panel/Markdown 高亮 + 文字提取）"""
-
-    def render_line(self, y):
-        strip = super().render_line(y)
-        strip = strip.apply_offsets(0, y)
-
-        # 对 Panel/Markdown 等非 Text/Content，手动渲染选中高亮
-        sel = self.text_selection
-        if sel is not None:
-            visual = self._render()
-            if not isinstance(visual, (Text, Content)):
-                strip = self._apply_highlight(strip, y, sel)
-
-        return strip
-
-    def _apply_highlight(self, strip, y, sel):
-        """给指定行的选中范围添加高亮背景（支持 None 表示全选）"""
-        start_y = sel.start.y if sel.start else 0
-        start_x = sel.start.x if sel.start else 0
-        end_y = sel.end.y if sel.end else 999999
-        end_x = sel.end.x if sel.end else 999999
-
-        if (start_y, start_x) > (end_y, end_x):
-            start_y, start_x, end_y, end_x = end_y, end_x, start_y, start_x
-        if not (start_y <= y <= end_y):
-            return strip
-
-        line_start = start_x if y == start_y else 0
-        line_end = end_x if y == end_y else 999999
-
-        new_segs = []
-        x = 0
-        for seg in strip._segments:
-            seg_len = len(seg.text)
-            if seg_len > 0 and x < line_end and x + seg_len > line_start:
-                new_segs.append(Segment(
-                    seg.text,
-                    (seg.style + _SEL_STYLE) if seg.style else _SEL_STYLE,
-                ))
-            else:
-                new_segs.append(seg)
-            x += seg_len
-        return Strip(new_segs, strip._cell_length)
-
-    def get_selection(self, selection):
-        # 默认逻辑：Text/Content 直接可用
-        result = super().get_selection(selection)
-        if result is not None:
-            return result
-        # Panel/Markdown/Table 等：从渲染后的行中提取纯文本
-        try:
-            lines = []
-            for y in range(self.content_size.height):
-                strip = super().render_line(y)
-                line = "".join(seg.text for seg in strip._segments if seg.text)
-                lines.append(line.rstrip())
-            text = "\n".join(lines)
-            if text.strip():
-                return selection.extract(text), "\n"
-        except Exception:
-            pass
-        return None
-
-
-# 用 SelectableStatic 替代 Static，全局生效
-Static = SelectableStatic
 MAX_HISTORY = 50
 
 # 自定义 Box：只显示左侧竖线
@@ -107,46 +32,6 @@ _LEFT_BAR_BOX = Box(
     "▐   \n"
     "    \n"
 )
-
-
-class StatusIndicator(Static):
-    """状态指示器"""
-
-    thinking = reactive(False)
-    elapsed = reactive(0)
-    round_tokens = reactive(0)
-    total_tokens = reactive(0)
-    provider_name = reactive("DeepSeek")
-
-    def render(self):
-        parts = Text()
-        if self.thinking:
-            round_k = f"{self.round_tokens / 1000:.1f}k"
-            total_k = f"{self.total_tokens / 1000:.1f}k"
-            parts.append(" ◉ ", style="bold #4D6BFE")
-            parts.append(self.provider_name, style="bold #4D6BFE")
-            parts.append(f"  {self.elapsed}s", style="#4D6BFE")
-            parts.append(f"  {round_k}/{total_k} ", style="dim")
-        else:
-            parts.append(" ◉ ", style="#333333")
-            parts.append(self.provider_name, style="#333333")
-        return parts
-
-
-class PasteInput(Input):
-    """自定义输入框：拦截粘贴，用 pyperclip 读完整剪贴板"""
-
-    def _on_paste(self, event) -> None:
-        """括号粘贴（<5KB）：直接读剪贴板"""
-        event.stop()
-        event.prevent_default()
-        try:
-            import pyperclip
-            content = pyperclip.paste()
-        except Exception:
-            content = event.text or ""
-        if content:
-            self.app._handle_paste_content(content)
 
 
 class SimpleApp(App):
@@ -276,11 +161,9 @@ class SimpleApp(App):
         self._ppt_slides = None
         self._ppt_index = 0
         self._ppt_preview_widget = None
-        # 输入历史
         self._history = []
         self._history_index = 0
         self._history_draft = ""
-        # 粘贴
         self._paste_content = None
         self.version = ""
         self.cwd = ""
@@ -311,7 +194,7 @@ class SimpleApp(App):
         self._status_right = self.query_one("#status-right", Static)
 
         self._header_right = self.query_one("#header-right", Static)
-        self._header_right.update(Text("选中文字Ctrl+C复制 · PageUp/Down翻页 · ESC中断 · Ctrl+C×2退出 ", style="bold #ffffff"))
+        self._header_right.update(Text("ESC中断 · Ctrl+C×2退出 ", style="bold #ffffff"))
         self._status_right.update(Text(""))
         self._status_indicator.provider_name = self.provider_name
         self.update_header()
@@ -327,13 +210,11 @@ class SimpleApp(App):
             self._chat_view.mount(Static(Text("  已加载 simple/ 记忆", style="bold #ffffff")))
         self._chat_view.mount(Static(Text("")))
 
-        # 启动队列刷新定时器
         self.set_interval(0.05, self._flush_queues)
 
     # --- 输入历史 ---
 
     def _load_history(self):
-        """从文件加载历史"""
         try:
             if os.path.exists(HISTORY_FILE):
                 with open(HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -343,7 +224,6 @@ class SimpleApp(App):
         self._history_index = len(self._history)
 
     def _save_history(self, text):
-        """保存一条记录到历史"""
         if not text.strip() or text.startswith("/") or len(text) > 500:
             return
         if text in self._history:
@@ -361,7 +241,6 @@ class SimpleApp(App):
             pass
 
     def _history_up(self):
-        """上箭头：回溯历史"""
         if not self._history:
             return
         inp = self.query_one("#input-field", Input)
@@ -373,7 +252,6 @@ class SimpleApp(App):
             inp.cursor_position = len(inp.value)
 
     def _history_down(self):
-        """下箭头：前进历史"""
         if not self._history:
             return
         inp = self.query_one("#input-field", Input)
@@ -386,7 +264,6 @@ class SimpleApp(App):
             inp.cursor_position = len(inp.value)
 
     def update_header(self):
-        """更新 header 显示（切换模型时调用）"""
         header = Text()
         header.append(" simple", style="bold #e6edf3")
         header.append(f"  v{self.version}  ·  ", style="#484f58")
@@ -398,10 +275,9 @@ class SimpleApp(App):
             self._header_left.update(header)
         self._status_indicator.provider_name = self.provider_name
 
-    # --- 队列式渲染（零 call_from_thread，消除闪烁）---
+    # --- 队列式渲染 ---
 
     def _flush_queues(self):
-        """定时批量处理挂载和更新，单次重绘"""
         mounts = []
         while True:
             try:
@@ -419,7 +295,6 @@ class SimpleApp(App):
         if not mounts and not updates:
             return
 
-        # 判断用户是否在底部附近（距底部 3 行以内）
         at_bottom = (
             self._chat_view.max_scroll_y == 0
             or self._chat_view.scroll_y >= self._chat_view.max_scroll_y - 3
@@ -434,12 +309,10 @@ class SimpleApp(App):
                 self._chat_view.scroll_end(animate=False)
 
     def _enqueue(self, *widgets):
-        """线程安全：将 widget 放入挂载队列"""
         for w in widgets:
             self._mount_queue.put(w)
 
     def _enqueue_update(self, widget, content):
-        """线程安全：将 widget 更新放入更新队列"""
         self._update_queue.put((widget, content))
 
     # --- 输入处理 ---
@@ -453,19 +326,18 @@ class SimpleApp(App):
             text = event.value.strip()
         menu.display = False
 
-        # 先取出粘贴内容，再清空输入框（清空会触发 on_input_changed 导致 _paste_content 被清除）
         paste = self._paste_content
         self._paste_content = None
         event.input.value = ""
 
-        # 交互式提问（ask_user / 危险确认 / PPT 预览）
+        # 交互式提问
         if self._inline_event and not self._inline_event.is_set():
             if self._inline_result is not None:
                 self._inline_result["answer"] = text if text else "(用户未输入内容)"
             self._inline_event.set()
             return
 
-        # 处理粘贴摘要：还原完整内容
+        # 粘贴摘要还原
         if paste:
             additional = re.sub(r'\[已粘贴 ~\d+ 行\]\s*', '', text).strip()
             text = paste + "\n\n" + additional if additional else paste
@@ -488,7 +360,6 @@ class SimpleApp(App):
     def on_input_changed(self, event: Input.Changed):
         if event.input.id != "input-field":
             return
-        # 用户改动了输入，清除粘贴摘要
         if self._paste_content and "[已粘贴" not in event.value:
             self._paste_content = None
 
@@ -524,7 +395,6 @@ class SimpleApp(App):
 
         menu = self.query_one("#slash-menu", OptionList)
         if menu.display:
-            # 斜杠菜单导航
             if event.key == "up":
                 if menu.highlighted is not None and menu.highlighted > 0:
                     menu.highlighted -= 1
@@ -533,7 +403,6 @@ class SimpleApp(App):
                     menu.highlighted += 1
             return
 
-        # 输入历史导航
         if event.key == "up":
             self._history_up()
             event.prevent_default()
@@ -581,7 +450,6 @@ class SimpleApp(App):
         self._chat_view.scroll_page_down(animate=False)
 
     def action_smart_paste(self):
-        """Ctrl+V / F5：从剪贴板读取"""
         try:
             import pyperclip
             content = pyperclip.paste()
@@ -593,17 +461,14 @@ class SimpleApp(App):
     action_force_paste = action_smart_paste
 
     def _handle_paste_content(self, content):
-        """统一处理粘贴内容：短内容进输入框，长内容显示摘要"""
         inp = self.query_one("#input-field", Input)
         lines = content.count('\n') + 1
 
         if lines < 3 and len(content) <= 150:
-            # 短内容：直接插入输入框
             pos = inp.cursor_position
             inp.value = inp.value[:pos] + content + inp.value[pos:]
             inp.cursor_position = pos + len(content)
         else:
-            # 长内容：显示摘要，完整内容存内部
             self._paste_content = content
             summary = f"[已粘贴 ~{lines} 行] "
             inp.value = summary
@@ -614,9 +479,7 @@ class SimpleApp(App):
         if selected:
             self.copy_to_clipboard(selected)
             self.screen.clear_selection()
-            self._enqueue(Static(Text("  已复制到剪贴板", style="bold #00cc66")))
             return
-        # 无选中文字：双击 Ctrl+C 退出
         now = time.time()
         if now - self._last_ctrl_c < 2:
             self.exit()
@@ -625,10 +488,9 @@ class SimpleApp(App):
         self._chat_view.mount(Static(Text("  再按一次 Ctrl+C 退出", style="#8b949e")))
         self._chat_view.scroll_end(animate=False)
 
-    # --- 公开接口（全部走队列，不触发即时重绘）---
+    # --- 公开接口（全部走队列）---
 
     def write_user(self, text):
-        """用户消息：蓝色左竖线 + 深色背景"""
         display = text if len(text) <= 300 else text[:300] + "..."
         panel = Panel(
             Text(display, style="bold #ffffff"),
@@ -641,11 +503,9 @@ class SimpleApp(App):
         self._enqueue(Static(Text("")), Static(panel))
 
     def write_assistant(self, markdown_text):
-        """AI 回复（非流式，一次性显示）"""
         self._enqueue(Static(Text("")), Static(Markdown(markdown_text)))
 
     def write_assistant_footer(self, elapsed):
-        """AI 回复底部：模型名 + 耗时"""
         footer = Text()
         footer.append("  ◻ ", style="#30363d")
         footer.append("simple", style="bold #8b949e")
@@ -653,31 +513,29 @@ class SimpleApp(App):
         self._enqueue(Static(footer))
 
     def write_system(self, text):
-        """系统消息"""
         self._enqueue(Static(Text(f"  {text}", style="#8b949e")))
 
     def write_warning(self, text):
-        """警告消息"""
         self._enqueue(Static(Text(f"  {text}", style="bold #f85149")))
 
+    _TOOL_NAME_MAP = {
+        "edit_file": "正在编辑",
+        "write_file": "正在写入",
+        "read_file": "正在读取",
+        "run_command": "正在执行",
+        "glob_files": "正在搜索文件",
+        "grep_files": "正在搜索内容",
+        "web_search": "正在搜索",
+        "web_fetch": "正在阅读",
+        "create_ppt": "正在设计 PPT 结构",
+        "create_skill": "创建 Skill",
+        "ask_user": "等待用户回答",
+        "task_list": "任务清单",
+        "read_clipboard": "正在读取剪贴板",
+    }
+
     def write_tool_preparing(self, tool_name):
-        """流式阶段：工具名已知但参数还在传，立即显示白色状态"""
-        _NAME_MAP = {
-            "edit_file": "正在编辑",
-            "write_file": "正在写入",
-            "read_file": "正在读取",
-            "run_command": "正在执行",
-            "glob_files": "正在搜索文件",
-            "grep_files": "正在搜索内容",
-            "web_search": "正在搜索",
-            "web_fetch": "正在阅读",
-            "create_ppt": "正在设计 PPT 结构",
-            "create_skill": "创建 Skill",
-            "ask_user": "等待用户回答",
-            "task_list": "任务清单",
-            "read_clipboard": "正在读取剪贴板",
-        }
-        display = _NAME_MAP.get(tool_name, tool_name)
+        display = self._TOOL_NAME_MAP.get(tool_name, tool_name)
         msg = Text()
         msg.append("  ")
         msg.append(display, style="bold white")
@@ -687,14 +545,12 @@ class SimpleApp(App):
         self._enqueue(w)
 
     def write_tool(self, text):
-        """工具开始执行：更新为完整信息（带路径/参数）"""
         msg = Text()
         msg.append("  ")
         parts = text.split(" ", 1)
-        action = parts[0]
-        rest = " " + parts[1] if len(parts) > 1 else ""
-        msg.append(action, style="bold white")
-        msg.append(rest, style="#8b949e")
+        msg.append(parts[0], style="bold white")
+        if len(parts) > 1:
+            msg.append(" " + parts[1], style="#8b949e")
 
         if self._preparing_tool_widget:
             w = self._preparing_tool_widget
@@ -708,7 +564,6 @@ class SimpleApp(App):
         self._current_tool_text = text
 
     def finish_tool(self, success=True):
-        """工具执行完毕 — 成功深绿，失败红色"""
         w = self._current_tool_widget
         if not w:
             return
@@ -716,20 +571,17 @@ class SimpleApp(App):
         msg = Text()
         msg.append("  ")
         parts = text.split(" ", 1)
-        action = parts[0]
-        rest = " " + parts[1] if len(parts) > 1 else ""
         color = "bold #00cc66" if success else "bold #ff4444"
-        msg.append(action, style=color)
-        msg.append(rest, style="#8b949e")
+        msg.append(parts[0], style=color)
+        if len(parts) > 1:
+            msg.append(" " + parts[1], style="#8b949e")
         self._enqueue_update(w, msg)
         self._current_tool_widget = None
 
     def write_code(self, renderable):
-        """显示语法高亮代码块"""
         self._enqueue(Static(renderable))
 
     def write_diff(self, old_text, new_text):
-        """左右并排 diff：左边新增（绿），右边删除（红）"""
         table = Table(
             show_header=False, show_edge=False, box=None,
             pad_edge=False, expand=True, padding=(0, 1),
@@ -744,17 +596,15 @@ class SimpleApp(App):
             table.add_row(new_line, old_line)
         self._enqueue(Static(table))
 
-    # --- 流式输出（也走队列）---
+    # --- 流式输出 ---
 
     def begin_response(self):
-        """开始流式 AI 回复"""
         w = Static("")
         self._streaming_widget = w
         self._last_stream_time = 0.0
         self._enqueue(Static(Text("")), w)
 
     def stream_chunk(self, accumulated_text):
-        """更新流式回复内容（节流 50ms）"""
         if not self._streaming_widget:
             return
         now = time.time()
@@ -764,7 +614,6 @@ class SimpleApp(App):
         self._enqueue_update(self._streaming_widget, Markdown(accumulated_text))
 
     def end_response(self, final_text=""):
-        """结束流式回复，同步更新完整文本并滚动到底部"""
         if self._streaming_widget and final_text:
             def _do():
                 with self.batch_update():
@@ -779,7 +628,6 @@ class SimpleApp(App):
     # --- PPT 预览 ---
 
     def _render_slide(self, index):
-        """渲染单页幻灯片预览"""
         slide = self._ppt_slides[index]
         total = len(self._ppt_slides)
         layout = slide.get("layout", "content")
@@ -804,7 +652,6 @@ class SimpleApp(App):
         )
 
     def preview_ppt(self, slides_data):
-        """PPT 预览模式：翻页浏览，输入修改意见或回车确认"""
         self._ppt_slides = slides_data
         self._ppt_index = 0
 
@@ -826,7 +673,6 @@ class SimpleApp(App):
         return result["answer"]
 
     def request_user_input(self, question):
-        """后台线程调用：在聊天区显示问题，等待用户通过底部输入框回答"""
         event = threading.Event()
         result = {"answer": ""}
         self._inline_event = event
@@ -838,7 +684,6 @@ class SimpleApp(App):
         return result["answer"]
 
     def request_danger_confirm(self, command):
-        """后台线程调用：确认危险命令。返回 True 表示用户确认执行"""
         answer = self.request_user_input(
             f"即将执行危险命令: {command}\n按 Enter 确认，输入任何内容取消"
         )
