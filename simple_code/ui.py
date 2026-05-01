@@ -36,7 +36,7 @@ class SelectableStatic(_BaseStatic):
 
         # 对 Panel/Markdown 等非 Text/Content，手动渲染选中高亮
         sel = self.text_selection
-        if sel is not None and sel.start is not None and sel.end is not None:
+        if sel is not None:
             visual = self._render()
             if not isinstance(visual, (Text, Content)):
                 strip = self._apply_highlight(strip, y, sel)
@@ -44,15 +44,19 @@ class SelectableStatic(_BaseStatic):
         return strip
 
     def _apply_highlight(self, strip, y, sel):
-        """给指定行的选中范围添加高亮背景"""
-        start, end = sel.start, sel.end
-        if (start.y, start.x) > (end.y, end.x):
-            start, end = end, start
-        if not (start.y <= y <= end.y):
+        """给指定行的选中范围添加高亮背景（支持 None 表示全选）"""
+        start_y = sel.start.y if sel.start else 0
+        start_x = sel.start.x if sel.start else 0
+        end_y = sel.end.y if sel.end else 999999
+        end_x = sel.end.x if sel.end else 999999
+
+        if (start_y, start_x) > (end_y, end_x):
+            start_y, start_x, end_y, end_x = end_y, end_x, start_y, start_x
+        if not (start_y <= y <= end_y):
             return strip
 
-        line_start = start.x if y == start.y else 0
-        line_end = end.x if y == end.y else 999999
+        line_start = start_x if y == start_y else 0
+        line_end = end_x if y == end_y else 999999
 
         new_segs = []
         x = 0
