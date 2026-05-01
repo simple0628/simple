@@ -635,17 +635,20 @@ def svg_to_slide(slide, svg_str):
     return converter.convert(slide, svg_str)
 
 
-def svgs_to_pptx(pages, output_path, default_animation="mixed", default_transition="fade",
+def svgs_to_pptx(pages, output_path, animation="mixed", transition="fade",
                  stagger=0.5, duration=0.4):
-    """将多个页面转换为 PPTX（含动画、转场、演讲稿）
+    """将多个页面转换为 PPTX
+
+    AI 负责：SVG 设计 + 演讲稿
+    代码负责：动画 + 转场（规则自动分配，不让 AI 决定）
 
     Args:
         pages: 页面列表，每项可以是：
             - 纯 SVG 字符串
-            - dict: {"svg": "...", "animation": "mixed", "transition": "fade", "notes": "演讲稿"}
+            - dict: {"svg": "...", "notes": "演讲稿"}
         output_path: 输出文件路径
-        default_animation: 默认入场动画
-        default_transition: 默认转场效果
+        animation: 入场动画模式（mixed/fade/none）
+        transition: 转场效果（fade/push/wipe/none）
         stagger: 元素间动画间隔（秒）
         duration: 单个动画持续时间（秒）
     """
@@ -657,18 +660,19 @@ def svgs_to_pptx(pages, output_path, default_animation="mixed", default_transiti
     prs.slide_height = Emu(px(720))
     blank = prs.slide_layouts[6]
     mixed_offset = 0
+    total = len(pages)
+
+    # 转场规则：首页 fade，中间页 push，末页 fade
+    def _auto_transition(idx):
+        if idx == 0 or idx == total - 1: return "fade"
+        return transition
 
     for i, page in enumerate(pages):
-        # 解析页面数据
         if isinstance(page, dict):
             svg_str = page.get("svg", "")
-            animation = page.get("animation", default_animation)
-            transition = page.get("transition", default_transition)
             notes = page.get("notes", "")
         else:
             svg_str = page
-            animation = default_animation
-            transition = default_transition
             notes = ""
 
         slide = prs.slides.add_slide(blank)
@@ -689,15 +693,16 @@ def svgs_to_pptx(pages, output_path, default_animation="mixed", default_transiti
             notes_slide = slide.notes_slide
             notes_slide.notes_text_frame.text = notes
 
-        # 2. 转场（必须在 timing 之前）
-        if transition and transition != "none":
-            tr_info = TRANSITIONS.get(transition, TRANSITIONS.get("fade"))
+        # 2. 转场（代码规则，首尾 fade，中间用指定效果）
+        tr_name = _auto_transition(i)
+        if tr_name and tr_name != "none":
+            tr_info = TRANSITIONS.get(tr_name, TRANSITIONS.get("fade"))
             if tr_info:
-                tr_xml = _build_transition_xml(transition, tr_info["duration_ms"])
+                tr_xml = _build_transition_xml(tr_name, tr_info["duration_ms"])
                 if tr_xml:
                     sld.append(etree.fromstring(tr_xml))
 
-        # 3. 入场动画
+        # 3. 入场动画（代码规则，mixed 模式自动分配）
         if animation and animation != "none" and anim_targets:
             stagger_ms = int(stagger * 1000)
             seq_targets = []
