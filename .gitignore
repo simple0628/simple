@@ -8,3 +8,5 @@ build/
 opencode/
 .claude/
 simple/
+*.pptx
+~$*

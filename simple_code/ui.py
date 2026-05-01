@@ -6,18 +6,90 @@ import time
 import threading
 import queue
 from textual.app import App, ComposeResult
-from textual.widgets import Static, Input, OptionList
+from textual.widgets import Static as _BaseStatic, Input, OptionList
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.reactive import reactive
 from textual.binding import Binding
+from textual.strip import Strip
+from textual.content import Content
 from textual import work
 from rich.text import Text
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.box import Box
+from rich.segment import Segment
+from rich.style import Style as RichStyle
 
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".simple-code", "history.txt")
+
+
+_SEL_STYLE = RichStyle(bgcolor="dark_cyan")
+
+
+class SelectableStatic(_BaseStatic):
+    """支持文字选中的 Static widget（含 Panel/Markdown 高亮 + 文字提取）"""
+
+    def render_line(self, y):
+        strip = super().render_line(y)
+        strip = strip.apply_offsets(0, y)
+
+        # 对 Panel/Markdown 等非 Text/Content，手动渲染选中高亮
+        sel = self.text_selection
+        if sel is not None and sel.start is not None and sel.end is not None:
+            visual = self._render()
+            if not isinstance(visual, (Text, Content)):
+                strip = self._apply_highlight(strip, y, sel)
+
+        return strip
+
+    def _apply_highlight(self, strip, y, sel):
+        """给指定行的选中范围添加高亮背景"""
+        start, end = sel.start, sel.end
+        if (start.y, start.x) > (end.y, end.x):
+            start, end = end, start
+        if not (start.y <= y <= end.y):
+            return strip
+
+        line_start = start.x if y == start.y else 0
+        line_end = end.x if y == end.y else 999999
+
+        new_segs = []
+        x = 0
+        for seg in strip._segments:
+            seg_len = len(seg.text)
+            if seg_len > 0 and x < line_end and x + seg_len > line_start:
+                new_segs.append(Segment(
+                    seg.text,
+                    (seg.style + _SEL_STYLE) if seg.style else _SEL_STYLE,
+                ))
+            else:
+                new_segs.append(seg)
+            x += seg_len
+        return Strip(new_segs, strip._cell_length)
+
+    def get_selection(self, selection):
+        # 默认逻辑：Text/Content 直接可用
+        result = super().get_selection(selection)
+        if result is not None:
+            return result
+        # Panel/Markdown/Table 等：从渲染后的行中提取纯文本
+        try:
+            lines = []
+            for y in range(self.content_size.height):
+                strip = super().render_line(y)
+                line = "".join(seg.text for seg in strip._segments if seg.text)
+                lines.append(line.rstrip())
+            text = "\n".join(lines)
+            if text.strip():
+                return selection.extract(text), "\n"
+        except Exception:
+            pass
+        return None
+
+
+# 用 SelectableStatic 替代 Static，全局生效
+Static = SelectableStatic
 MAX_HISTORY = 50
 
 # 自定义 Box：只显示左侧竖线
@@ -175,10 +247,12 @@ class SimpleApp(App):
 
     BINDINGS = [
         Binding("escape", "interrupt", "中断", show=False),
-        Binding("ctrl+c", "quit_app", "退出", show=False),
+        Binding("ctrl+c", "copy_or_quit", "复制/退出", show=False),
         Binding("tab", "complete_slash", "补全", show=False),
         Binding("ctrl+v", "smart_paste", "粘贴", show=False, priority=True),
         Binding("f5", "force_paste", "粘贴剪贴板", show=False, priority=True),
+        Binding("pageup", "scroll_up_page", "上翻", show=False),
+        Binding("pagedown", "scroll_down_page", "下翻", show=False),
     ]
 
     def __init__(self, on_submit=None):
@@ -227,14 +301,13 @@ class SimpleApp(App):
 
     def on_mount(self):
         self._chat_view = self.query_one("#chat-view", VerticalScroll)
-        self._chat_view.can_focus = False
         self._status_indicator = self.query_one("#status-indicator", StatusIndicator)
         self._header_left = self.query_one("#header-left", Static)
         self._status_left = self.query_one("#status-left", Static)
         self._status_right = self.query_one("#status-right", Static)
 
         self._header_right = self.query_one("#header-right", Static)
-        self._header_right.update(Text("按住Shift选中复制 · ESC中断 · Ctrl+C×2退出 ", style="bold #ffffff"))
+        self._header_right.update(Text("选中文字Ctrl+C复制 · PageUp/Down翻页 · ESC中断 · Ctrl+C×2退出 ", style="bold #ffffff"))
         self._status_right.update(Text(""))
         self._status_indicator.provider_name = self.provider_name
         self.update_header()
@@ -247,12 +320,7 @@ class SimpleApp(App):
             f"  模型: {self.model_name}  ·  输入 /指南 查看帮助", style="bold #ffffff"
         )))
         if self.has_memory:
-            mem_line = Text()
-            mem_line.append("  已加载 simple/ 记忆", style="bold #ffffff")
-            mem_line.append("  ·  按住Shift选中复制", style="bold #ffffff")
-            self._chat_view.mount(Static(mem_line))
-        else:
-            self._chat_view.mount(Static(Text("  按住Shift选中复制", style="bold #ffffff")))
+            self._chat_view.mount(Static(Text("  已加载 simple/ 记忆", style="bold #ffffff")))
         self._chat_view.mount(Static(Text("")))
 
         # 启动队列刷新定时器
@@ -347,12 +415,18 @@ class SimpleApp(App):
         if not mounts and not updates:
             return
 
+        # 判断用户是否在底部附近（距底部 3 行以内）
+        at_bottom = (
+            self._chat_view.max_scroll_y == 0
+            or self._chat_view.scroll_y >= self._chat_view.max_scroll_y - 3
+        )
+
         with self.batch_update():
             for w in mounts:
                 self._chat_view.mount(w)
             for widget, content in updates:
                 widget.update(content)
-            if mounts:
+            if at_bottom and (mounts or updates):
                 self._chat_view.scroll_end(animate=False)
 
     def _enqueue(self, *widgets):
@@ -496,6 +570,12 @@ class SimpleApp(App):
                 self._inline_result["answer"] = "(用户取消)"
             self._inline_event.set()
 
+    def action_scroll_up_page(self):
+        self._chat_view.scroll_page_up(animate=False)
+
+    def action_scroll_down_page(self):
+        self._chat_view.scroll_page_down(animate=False)
+
     def action_smart_paste(self):
         """Ctrl+V / F5：从剪贴板读取"""
         try:
@@ -525,7 +605,14 @@ class SimpleApp(App):
             inp.value = summary
             inp.cursor_position = len(summary)
 
-    def action_quit_app(self):
+    def action_copy_or_quit(self):
+        selected = self.screen.get_selected_text()
+        if selected:
+            self.copy_to_clipboard(selected)
+            self.screen.clear_selection()
+            self._enqueue(Static(Text("  已复制到剪贴板", style="bold #00cc66")))
+            return
+        # 无选中文字：双击 Ctrl+C 退出
         now = time.time()
         if now - self._last_ctrl_c < 2:
             self.exit()

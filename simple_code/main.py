@@ -85,6 +85,7 @@ def main():
             app.write_system("  Ctrl+C × 2   退出程序")
             app.write_system("  Ctrl+V       粘贴")
             app.write_system("  F5           粘贴长文本")
+            app.write_system("  PageUp/Down  翻页浏览")
             app.write_system("")
             return
 
