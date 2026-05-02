@@ -211,13 +211,6 @@ def first_run_setup():
             if self._phase == "disclaimer":
                 # 进入 API Key 输入阶段
                 self._phase = "input"
-                self.query_one("#disclaimer ._Static", _Static).update(
-                    Text.from_markup(
-                        "[bold white]配置 DeepSeek API Key[/bold white]\n\n"
-                        "[dim]获取地址: https://platform.deepseek.com/api_keys[/dim]\n\n"
-                        "[dim]输入后按回车验证[/dim]"
-                    )
-                ) if False else None
                 status.update(Text.from_markup("[bold #ffffff]请在下方输入 API Key，获取地址: https://platform.deepseek.com/api_keys[/bold #ffffff]"))
                 inp.placeholder = "请输入 API Key..."
                 inp.password = True

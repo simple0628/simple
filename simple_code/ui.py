@@ -588,22 +588,23 @@ class SimpleApp(App):
     def _start_tool_blink(self):
         """2秒后开始闪烁当前工具状态行"""
         import time as _time
+        # 捕获启动时的 widget 引用，避免竞态
+        target_widget = self._current_tool_widget
+        target_text = self._current_tool_text
         _time.sleep(2)
         dots = 0
-        while self._tool_blink_active:
-            w = self._current_tool_widget
-            text = self._current_tool_text
-            if not w or not text:
+        while self._tool_blink_active and self._current_tool_widget is target_widget:
+            if not target_widget or not target_text:
                 break
             dots = (dots + 1) % 4
             suffix = "." * dots + " " * (3 - dots)
             msg = Text()
-            parts = text.split(" ", 1)
+            parts = target_text.split(" ", 1)
             msg.append(parts[0], style="bold white")
             if len(parts) > 1:
                 msg.append(" " + parts[1], style="#8b949e")
             msg.append(f" {suffix}", style="#8b949e")
-            self._enqueue_update(w, msg)
+            self._enqueue_update(target_widget, msg)
             _time.sleep(0.5)
 
     def finish_tool(self, success=True):

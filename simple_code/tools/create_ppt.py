@@ -45,8 +45,6 @@ definition = {
     },
 }
 
-needs_pause = False
-
 
 def label(args):
     return f"正在设计 PPT: {args.get('path', '')}"
@@ -63,7 +61,7 @@ def execute(args, app=None, **kwargs):
         answer = app.preview_ppt(pages)
         if answer == "(用户取消)":
             return "用户取消了 PPT 创建"
-        if answer not in ("用户未输入内容)", ""):
+        if answer not in ("(用户未输入内容)", ""):
             # 检查是否是确认短语
             confirm = {"ok", "好", "行", "做吧", "确认", "生成", "可以", "没问题",
                        "好的", "OK", "Ok", "是", "对", "就这样", "开始", "done", "yes"}
@@ -140,8 +138,7 @@ SVG 限制：
     merged = []
     for i, svg_page in enumerate(svg_pages):
         svg_str = svg_page.get("svg", "") if isinstance(svg_page, dict) else svg_page
-        notes = pages[i].get("notes", "") if i < len(pages) else ""
-        merged.append({"svg": svg_str, "notes": notes})
+        merged.append({"svg": svg_str, "notes": ""})
 
     try:
         count = svgs_to_pptx(merged, path)
@@ -152,4 +149,19 @@ SVG 限制：
             app.finish_tool(success=False)
         return f"PPTX 转换失败: {e}"
 
-    return f"PPT 已创建: {path}（{count} 页，含动画·转场·演讲稿）"
+    # 生成演讲稿 txt
+    notes_path = path.rsplit(".", 1)[0] + "_演讲稿.txt"
+    try:
+        with open(notes_path, "w", encoding="utf-8") as f:
+            for i, page in enumerate(pages, 1):
+                title = page.get("title", f"第{i}页")
+                notes = page.get("notes", "")
+                f.write(f"【第{i}页 - {title}】\n")
+                f.write(f"{notes}\n\n")
+    except Exception:
+        notes_path = ""
+
+    result = f"PPT 已创建: {path}（{count} 页，含动画·转场）"
+    if notes_path:
+        result += f"\n演讲稿: {notes_path}"
+    return result
