@@ -10,3 +10,4 @@ opencode/
 simple/
 *.pptx
 ~$*
+node_modules/
