@@ -432,6 +432,12 @@ class SimpleApp(App):
         menu.display = False
         self.query_one("#input-field", Input).focus()
 
+    # --- 点击时保持输入框焦点 ---
+
+    def on_click(self, event):
+        """任何点击都把焦点还给输入框，确保拖拽文件等操作正常"""
+        self.query_one("#input-field", Input).focus()
+
     # --- 键盘动作 ---
 
     def action_interrupt(self):
