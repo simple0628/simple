@@ -2,13 +2,8 @@
 
 import os
 import json
-import getpass
 
 from openai import OpenAI
-from rich.console import Console
-from rich.panel import Panel
-
-console = Console()
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".simple-code")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -145,40 +140,135 @@ def test_provider_key(provider_id, api_key):
         return False
 
 
-# --- 首次启动 ---
-
-def _input_and_verify_key(prompt_text="  请输入你的 API Key: "):
-    """输入 API Key 并验证连通性，失败则重试"""
-    while True:
-        api_key = getpass.getpass(prompt_text).strip()
-        if not api_key:
-            console.print("[red]  API Key 不能为空，请重新输入[/red]")
-            continue
-
-        console.print("[dim]  正在验证...[/dim]", end="")
-        if test_provider_key("deepseek", api_key):
-            console.print("\r[green]  验证通过！  [/green]")
-            return api_key
-        else:
-            console.print("\r[red]  验证失败，请检查 API Key 是否正确[/red]")
-
+# --- 首次启动（TUI 界面）---
 
 def first_run_setup():
-    """首次启动引导：显示免责声明，获取 DeepSeek API Key"""
-    console.print(Panel(DISCLAIMER, border_style="yellow", padding=(1, 2)))
-    input()
+    """首次启动引导：TUI 界面显示免责声明 + 获取 API Key"""
+    from textual.app import App, ComposeResult
+    from textual.containers import Vertical, VerticalScroll
+    from textual.widgets import Static as _Static, Input
+    from textual.binding import Binding
+    from rich.text import Text
 
-    console.print("[bold white]配置 DeepSeek API Key[/bold white]")
-    console.print("[dim]你可以在 https://platform.deepseek.com/api_keys 获取 API Key[/dim]")
-    console.print()
+    result = {"api_key": ""}
 
-    api_key = _input_and_verify_key()
-    save_config({
-        "current": "deepseek",
-        "providers": {"deepseek": {"api_key": api_key}}
-    })
-    console.print()
-    return api_key
+    class SetupApp(App):
+        CSS = """
+        Screen {
+            background: #000000;
+        }
+        #disclaimer {
+            height: 1fr;
+            padding: 1 2;
+            background: #000000;
+            scrollbar-size: 0 0;
+        }
+        #disclaimer Static {
+            color: #ffffff;
+        }
+        #bottom-bar {
+            height: 3;
+            padding: 0 2;
+            background: #111111;
+        }
+        #status {
+            height: 1;
+            padding: 0 2;
+            color: #888888;
+        }
+        #key-input {
+            background: #111111;
+            border: none;
+        }
+        #key-input:focus {
+            border: none;
+        }
+        """
+
+        BINDINGS = [
+            Binding("escape", "quit", "退出"),
+            Binding("ctrl+c", "quit", "退出", show=False),
+        ]
+
+        def __init__(self):
+            super().__init__()
+            self._phase = "disclaimer"  # disclaimer → input → verifying
+
+        def compose(self) -> ComposeResult:
+            with VerticalScroll(id="disclaimer"):
+                yield _Static(Text.from_markup(DISCLAIMER))
+            with Vertical(id="bottom-bar"):
+                yield _Static("", id="status")
+                yield Input(placeholder="按回车继续...", id="key-input")
+
+        def on_mount(self):
+            self.query_one("#key-input", Input).focus()
+
+        def on_input_submitted(self, event: Input.Submitted):
+            inp = self.query_one("#key-input", Input)
+            status = self.query_one("#status", _Static)
+
+            if self._phase == "disclaimer":
+                # 进入 API Key 输入阶段
+                self._phase = "input"
+                self.query_one("#disclaimer ._Static", _Static).update(
+                    Text.from_markup(
+                        "[bold white]配置 DeepSeek API Key[/bold white]\n\n"
+                        "[dim]获取地址: https://platform.deepseek.com/api_keys[/dim]\n\n"
+                        "[dim]输入后按回车验证[/dim]"
+                    )
+                ) if False else None
+                status.update(Text.from_markup("[bold #ffffff]请在下方输入 API Key，获取地址: https://platform.deepseek.com/api_keys[/bold #ffffff]"))
+                inp.placeholder = "请输入 API Key..."
+                inp.password = True
+                inp.value = ""
+                return
+
+            if self._phase == "input":
+                api_key = inp.value.strip()
+                if not api_key:
+                    status.update("[red]API Key 不能为空[/red]")
+                    return
+
+                # 验证
+                self._phase = "verifying"
+                status.update("正在验证...")
+                inp.disabled = True
+
+                import threading
+                def verify():
+                    success = test_provider_key("deepseek", api_key)
+                    self.call_from_thread(self._on_verify_result, success, api_key)
+
+                threading.Thread(target=verify, daemon=True).start()
+
+        def _on_verify_result(self, success, api_key):
+            inp = self.query_one("#key-input", Input)
+            status = self.query_one("#status", _Static)
+
+            if success:
+                result["api_key"] = api_key
+                save_config({
+                    "current": "deepseek",
+                    "providers": {"deepseek": {"api_key": api_key}}
+                })
+                self.exit()
+            else:
+                self._phase = "input"
+                status.update("[red]验证失败，请检查 API Key 是否正确[/red]")
+                inp.value = ""
+                inp.disabled = False
+                inp.focus()
+
+    app = SetupApp()
+    app.run()
+
+    if not result["api_key"]:
+        # 用户按 ESC 退出，没有配置
+        import sys
+        sys.exit(0)
+
+    return result["api_key"]
 
 
 # --- Skill 管理 ---

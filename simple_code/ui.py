@@ -157,6 +157,7 @@ class SimpleApp(App):
         self._current_tool_widget = None
         self._current_tool_text = ""
         self._preparing_tool_widget = None
+        self._tool_blink_active = False
         self._ppt_slides = None
         self._ppt_index = 0
         self._ppt_preview_widget = None
@@ -543,6 +544,10 @@ class SimpleApp(App):
     }
 
     def write_tool_preparing(self, tool_name):
+        # 如果上一个 preparing 还没被消耗，跳过（等实际执行时再显示）
+        if self._preparing_tool_widget:
+            return
+
         display = self._TOOL_NAME_MAP.get(tool_name, tool_name)
         msg = Text()
         msg.append(display, style="bold white")
@@ -552,6 +557,9 @@ class SimpleApp(App):
         self._enqueue(w)
 
     def write_tool(self, text):
+        # 停止上一个工具的闪烁
+        self._tool_blink_active = False
+
         msg = Text()
         parts = text.split(" ", 1)
         msg.append(parts[0], style="bold white")
@@ -562,6 +570,9 @@ class SimpleApp(App):
             w = self._preparing_tool_widget
             self._enqueue_update(w, msg)
             self._preparing_tool_widget = None
+        elif self._current_tool_widget:
+            w = self._current_tool_widget
+            self._enqueue_update(w, msg)
         else:
             w = Static(msg)
             self._enqueue(w)
@@ -569,7 +580,34 @@ class SimpleApp(App):
         self._current_tool_widget = w
         self._current_tool_text = text
 
+        # 启动闪烁
+        self._tool_blink_active = True
+        self._start_tool_blink()
+
+    @work(thread=True)
+    def _start_tool_blink(self):
+        """2秒后开始闪烁当前工具状态行"""
+        import time as _time
+        _time.sleep(2)
+        dots = 0
+        while self._tool_blink_active:
+            w = self._current_tool_widget
+            text = self._current_tool_text
+            if not w or not text:
+                break
+            dots = (dots + 1) % 4
+            suffix = "." * dots + " " * (3 - dots)
+            msg = Text()
+            parts = text.split(" ", 1)
+            msg.append(parts[0], style="bold white")
+            if len(parts) > 1:
+                msg.append(" " + parts[1], style="#8b949e")
+            msg.append(f" {suffix}", style="#8b949e")
+            self._enqueue_update(w, msg)
+            _time.sleep(0.5)
+
     def finish_tool(self, success=True):
+        self._tool_blink_active = False
         w = self._current_tool_widget
         if not w:
             return

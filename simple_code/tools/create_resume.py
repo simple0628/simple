@@ -23,6 +23,7 @@ definition = {
 - job_description（可选）：目标岗位 JD，AI 会据此优化简历内容
 - style（可选）：风格偏好，如"简约"、"专业"、"创意"等，默认"专业"
 - html_file（可选）：已有的 HTML 简历文件路径，传了则跳过 AI 生成，直接转 PDF
+- photo（可选）：一寸照片文件路径（jpg/png），会嵌入到简历右上角
 
 两种用法：
 1. 从素材生成：传 content → AI 生成 HTML → 转 PDF
@@ -35,6 +36,7 @@ definition = {
                 "job_description": {"type": "string", "description": "目标岗位 JD（可选）"},
                 "style": {"type": "string", "description": "风格偏好（可选）"},
                 "html_file": {"type": "string", "description": "已有的 HTML 文件路径，直接转 PDF"},
+                "photo": {"type": "string", "description": "一寸照片路径（jpg/png）"},
             },
             "required": ["path"],
         },
@@ -46,9 +48,20 @@ def label(args):
     return f"正在生成简历"
 
 
+def _encode_photo(photo_path):
+    """将照片转为 base64 data URI"""
+    import base64
+    ext = os.path.splitext(photo_path)[1].lower()
+    mime = {"jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}.get(ext, "image/jpeg")
+    with open(photo_path, "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+    return f"data:{mime};base64,{data}"
+
+
 def execute(args, app=None, **kwargs):
     path = args["path"]
     html_file = args.get("html_file", "")
+    photo = args.get("photo", "")
 
     # 确保输出目录存在
     out_dir = os.path.dirname(path)
@@ -83,7 +96,8 @@ def execute(args, app=None, **kwargs):
         provider = get_provider()
         client = OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
 
-        prompt = _build_prompt(content, job_description, style)
+        has_photo = bool(photo and os.path.exists(photo))
+        prompt = _build_prompt(content, job_description, style, has_photo)
 
         try:
             response = client.chat.completions.create(
@@ -108,6 +122,14 @@ def execute(args, app=None, **kwargs):
                 app.finish_tool(success=False)
             return f"AI 生成失败: {e}"
 
+        # 嵌入照片
+        if photo and os.path.exists(photo):
+            try:
+                data_uri = _encode_photo(photo)
+                html = html.replace("{{PHOTO_DATA_URI}}", data_uri)
+            except Exception:
+                pass
+
         # 保存 HTML
         html_path = path.rsplit(".", 1)[0] + ".html"
         with open(html_path, "w", encoding="utf-8") as f:
@@ -130,8 +152,18 @@ def execute(args, app=None, **kwargs):
     return f"简历已生成: {path}\nHTML 版本: {html_path}"
 
 
-def _build_prompt(content, job_description, style):
+def _build_prompt(content, job_description, style, has_photo=False):
     """构建生成简历 HTML 的 prompt"""
+
+    photo_section = ""
+    if has_photo:
+        photo_section = """
+## 照片要求
+- 在简历顶部右侧放置一寸照片
+- 使用 <img> 标签，src 属性写 {{PHOTO_DATA_URI}}（程序会自动替换为实际图片）
+- 照片尺寸：宽 90px，高 120px
+- 照片和姓名/联系方式用 table 实现左右布局（姓名左边，照片右边）
+"""
 
     jd_section = ""
     if job_description:
@@ -152,7 +184,7 @@ def _build_prompt(content, job_description, style):
 {content}
 
 {jd_section}
-
+{photo_section}
 ## 设计要求
 - 风格：{style}
 - 输出完整的 HTML 文件（包含 <!DOCTYPE html>、<html>、<head>、<body>）
@@ -172,9 +204,11 @@ def _build_prompt(content, job_description, style):
 - body 背景必须是白色（#ffffff），不要灰色背景
 - 不要 box-shadow、不要卡片式设计
 - 简历直接铺满页面，不要居中的"纸张"容器
-- 不要用 emoji 符号，用纯文字
+- 禁止使用任何 emoji 符号（如📞✉⚙等），全部用纯文字
+- 联系方式直接写"电话：xxx"、"邮箱：xxx"，不要用图标代替文字
 - 内容必须紧凑，确保在一页 A4 内完成，不要留大量空白
 - 禁止设置 min-height（会导致 PDF 出现多余空白页）
+- 技能标签不要加背景色，用纯文字列出即可
 - body 的 padding 不要超过 15mm
 
 ## 简历内容规范
