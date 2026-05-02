@@ -1,6 +1,6 @@
 """可复用 UI 组件：SelectableStatic、StatusIndicator、PasteInput"""
 
-from textual.widgets import Static as _BaseStatic, Input
+from textual.widgets import Static as _BaseStatic, Input, TextArea
 from textual.reactive import reactive
 from textual.strip import Strip
 from textual.content import Content
@@ -102,13 +102,89 @@ class StatusIndicator(Static):
         return parts
 
 
-class PasteInput(Input):
-    """自定义输入框：拦截粘贴，支持拖拽文件路径 + 剪贴板读取"""
+class PasteInput(TextArea):
+    """多行输入框：Enter 提交，Ctrl+Enter 换行，支持拖拽和粘贴"""
+
+    # 兼容 Input 的 Submitted 事件
+    class Submitted:
+        def __init__(self, input, value):
+            self.input = input
+            self.value = value
+
+    def __init__(self, placeholder="", **kwargs):
+        super().__init__("", **kwargs)
+        self._placeholder = placeholder
+
+    def on_mount(self):
+        self.show_line_numbers = False
+        self.tab_behavior = "focus"
+
+    @property
+    def value(self):
+        return self.text
+
+    @value.setter
+    def value(self, v):
+        self.clear()
+        self.insert(v)
+
+    @property
+    def cursor_position(self):
+        row, col = self.cursor_location
+        # 简单转换：计算到光标位置的总字符数
+        lines = self.text.split("\n")
+        pos = sum(len(lines[i]) + 1 for i in range(row)) + col
+        return pos
+
+    @cursor_position.setter
+    def cursor_position(self, pos):
+        text = self.text
+        row = 0
+        col = pos
+        for line in text.split("\n"):
+            if col <= len(line):
+                break
+            col -= len(line) + 1
+            row += 1
+        self.cursor_location = (row, max(0, col))
+
+    @property
+    def placeholder(self):
+        return self._placeholder
+
+    @placeholder.setter
+    def placeholder(self, v):
+        self._placeholder = v
+
+    @property
+    def password(self):
+        return False
+
+    @password.setter
+    def password(self, v):
+        pass  # TextArea 不支持密码模式，忽略
+
+    async def _on_key(self, event) -> None:
+        if event.key in ("ctrl+enter", "ctrl+j"):
+            # Ctrl+Enter = 换行（手动插入）
+            event.stop()
+            event.prevent_default()
+            start, end = self.selection
+            self._replace_via_keyboard("\n", start, end)
+            return
+        if event.key == "enter":
+            # Enter = 提交
+            event.stop()
+            event.prevent_default()
+            submitted = self.Submitted(input=self, value=self.text)
+            self.app.on_input_submitted(submitted)
+            return
+        # 其他按键交给 TextArea 处理
+        await super()._on_key(event)
 
     def _on_paste(self, event) -> None:
         event.stop()
         event.prevent_default()
-        # 优先用 event.text（拖拽文件路径在这里），为空时再读剪贴板
         content = event.text or ""
         if not content:
             try:

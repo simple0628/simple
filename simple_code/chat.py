@@ -89,6 +89,8 @@ def chat_round(client, model_name, messages, app, tool_logs, token_counter, inte
             if hasattr(chunk, 'usage') and chunk.usage:
                 token_counter["total"] += chunk.usage.total_tokens
                 token_counter["round"] += chunk.usage.total_tokens
+                if hasattr(chunk.usage, 'prompt_tokens') and chunk.usage.prompt_tokens:
+                    token_counter["prompt"] = chunk.usage.prompt_tokens
                 app.update_tokens(token_counter["round"], token_counter["total"])
 
             if not chunk.choices:
@@ -183,19 +185,19 @@ def chat_round(client, model_name, messages, app, tool_logs, token_counter, inte
         return reply
 
 
-def save_memory(client, model_name, memory_dir, user_input, reply, token_counter):
-    """每次对话都保存：长期记忆（完整）+ 短期记忆（摘要）"""
+def save_memory(client, model_name, memory_dir, session_file, user_input, reply, token_counter):
+    """每次对话都保存：长期记忆（追加到 session 文件）+ 短期记忆（摘要）"""
     try:
         today = date.today()
         today_str = today.strftime("%Y-%m-%d")
+        from datetime import datetime
+        time_str = datetime.now().strftime("%H:%M")
 
-        # AI 生成摘要和标题
+        # AI 生成摘要
         memory_response = client.chat.completions.create(
             model=model_name,
             messages=[
-                {"role": "system", "content": """为这轮对话生成记忆摘要，按以下格式输出（两行，不要多余内容）：
-标题: 简短标题（用于文件名，如"搜狐调研"、"计算器项目"）
-摘要: 一句话总结这轮对话做了什么"""},
+                {"role": "system", "content": """为这轮对话生成一句话摘要，只输出摘要内容，不要多余格式。"""},
                 {"role": "user", "content": f"用户说: {user_input[:300]}\nAI回复: {reply[:500]}"}
             ]
         )
@@ -203,64 +205,88 @@ def save_memory(client, model_name, memory_dir, user_input, reply, token_counter
             token_counter["total"] += memory_response.usage.total_tokens
             token_counter["round"] += memory_response.usage.total_tokens
 
-        content = memory_response.choices[0].message.content.strip()
-        title, summary = _parse_memory_response(content)
-        if not title:
-            title = "对话记录"
+        summary = memory_response.choices[0].message.content.strip()
         if not summary:
             summary = user_input[:50]
 
-        # 清理文件名中的非法字符
-        title = _sanitize_filename(title)
-
-        # 保存长期记忆（完整记录，永久保存）
-        long_term_dir = os.path.join(memory_dir, "长期记忆")
-        os.makedirs(long_term_dir, exist_ok=True)
-        filename = f"{today_str}_{title}.md"
-        long_term_path = os.path.join(long_term_dir, filename)
-        with open(long_term_path, "a", encoding="utf-8") as f:
-            f.write(f"## {today_str}\n\n")
+        # 保存长期记忆（追加到本次 session 文件）
+        with open(session_file, "a", encoding="utf-8") as f:
+            f.write(f"## {time_str}\n\n")
             f.write(f"**用户:** {user_input}\n\n")
             f.write(f"**AI:** {reply}\n\n---\n\n")
 
-        # 保存短期记忆（追加一行摘要）
+        # 保存短期记忆（追加一行摘要，带日期+时间）
         short_term_path = os.path.join(memory_dir, "短期记忆.md")
         with open(short_term_path, "a", encoding="utf-8") as f:
-            f.write(f"- {today_str} | {summary}\n")
+            f.write(f"- {today_str} {time_str} | {summary}\n")
 
         # 清理 7 天前的短期记忆
         _clean_short_term_memory(short_term_path, today)
 
         return True
     except Exception as e:
-        # 记忆保存失败时打印错误便于调试
         import traceback
         traceback.print_exc()
         return False
 
 
-def _sanitize_filename(name):
-    """清理文件名中的非法字符"""
-    import re
-    # 移除 Windows 文件名非法字符
-    name = re.sub(r'[<>:"/\\|?*]', '', name)
-    # 去除首尾空格和点
-    name = name.strip(' .')
-    # 限制长度
-    return name[:30] if name else "对话记录"
 
+def compress_context(client, model_name, messages, token_counter, max_prompt_tokens=55000, keep_recent=6):
+    """当 prompt tokens 超过阈值时，压缩旧对话为摘要，保留最近几轮"""
+    prompt_tokens = token_counter.get("prompt", 0)
+    if prompt_tokens < max_prompt_tokens:
+        return False
 
-def _parse_memory_response(content):
-    """解析 AI 返回的记忆内容，返回 (标题, 摘要)"""
-    title = ""
-    summary = ""
-    for line in content.split("\n"):
-        line = line.strip()
-        if line.startswith("标题:") or line.startswith("标题："):
-            title = line.split(":", 1)[-1].split("：", 1)[-1].strip()
-        elif line.startswith("摘要:") or line.startswith("摘要："):
-            summary = line.split(":", 1)[-1].split("：", 1)[-1].strip()
-    return title, summary
+    # 保留 system prompt（第一条）
+    system_msg = messages[0]
+
+    # 找到最近 keep_recent 轮的起始位置
+    user_count = 0
+    split_idx = len(messages)
+    for i in range(len(messages) - 1, 0, -1):
+        if messages[i]["role"] == "user":
+            user_count += 1
+            if user_count >= keep_recent:
+                split_idx = i
+                break
+
+    old_messages = messages[1:split_idx]
+    recent_messages = messages[split_idx:]
+
+    if not old_messages:
+        return False
+
+    # 用 AI 压缩旧对话
+    old_text = ""
+    for m in old_messages:
+        role = m.get("role", "")
+        content = m.get("content", "") or ""
+        if role in ("user", "assistant") and content:
+            old_text += f"{role}: {content[:200]}\n"
+
+    try:
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "将以下对话历史压缩为一段简短的中文摘要，保留关键信息（做了什么、决策、文件路径等），不超过500字。"},
+                {"role": "user", "content": old_text[:3000]}
+            ]
+        )
+        if hasattr(response, 'usage') and response.usage:
+            token_counter["total"] += response.usage.total_tokens
+
+        summary = response.choices[0].message.content.strip()
+    except Exception:
+        return False
+
+    # 重建 messages
+    messages.clear()
+    messages.append(system_msg)
+    messages.append({"role": "user", "content": f"[以下是之前对话的摘要]\n{summary}"})
+    messages.append({"role": "assistant", "content": "好的，我已了解之前的对话内容。请继续。"})
+    messages.extend(recent_messages)
+
+    return True
 
 
 def _clean_short_term_memory(path, today):
@@ -275,7 +301,7 @@ def _clean_short_term_memory(path, today):
         # 只保留日期 >= cutoff 的行
         kept = []
         for line in lines:
-            # 格式: - 2026-05-01 | 摘要
+            # 格式: - 2026-05-01 15:30 | 摘要
             stripped = line.strip()
             if stripped.startswith("- ") and len(stripped) >= 12:
                 date_part = stripped[2:12]

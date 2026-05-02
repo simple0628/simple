@@ -106,7 +106,9 @@ class SimpleApp(App):
     }
 
     #input-area {
-        height: 3;
+        height: auto;
+        min-height: 3;
+        max-height: 6;
         border-top: solid #30363d;
         border-bottom: solid #30363d;
         background: #000000;
@@ -122,6 +124,9 @@ class SimpleApp(App):
 
     #input-field {
         width: 1fr;
+        height: auto;
+        min-height: 1;
+        max-height: 4;
         border: none;
         background: #000000;
         color: #ffffff;
@@ -184,7 +189,7 @@ class SimpleApp(App):
                 yield Static("", id="status-right")
             with Horizontal(id="input-area"):
                 yield Static("> ", id="input-prompt")
-                yield PasteInput(placeholder="输入消息...", id="input-field")
+                yield PasteInput(placeholder="Ctrl+Enter 换行", id="input-field")
 
     def on_mount(self):
         self._chat_view = self.query_one("#chat-view", VerticalScroll)
@@ -194,7 +199,7 @@ class SimpleApp(App):
         self._status_right = self.query_one("#status-right", Static)
 
         self._header_right = self.query_one("#header-right", Static)
-        self._header_right.update(Text("ESC中断 · Ctrl+C×2退出 ", style="bold #ffffff"))
+        self._header_right.update(Text("Ctrl+Enter换行 · ESC中断 · Ctrl+C×2退出 ", style="bold #ffffff"))
         self._status_right.update(Text(""))
         self._status_indicator.provider_name = self.provider_name
         self.update_header()
@@ -243,7 +248,7 @@ class SimpleApp(App):
     def _history_up(self):
         if not self._history:
             return
-        inp = self.query_one("#input-field", Input)
+        inp = self.query_one("#input-field", PasteInput)
         if self._history_index == len(self._history):
             self._history_draft = inp.value
         if self._history_index > 0:
@@ -254,7 +259,7 @@ class SimpleApp(App):
     def _history_down(self):
         if not self._history:
             return
-        inp = self.query_one("#input-field", Input)
+        inp = self.query_one("#input-field", PasteInput)
         if self._history_index < len(self._history):
             self._history_index += 1
             if self._history_index == len(self._history):
@@ -317,7 +322,7 @@ class SimpleApp(App):
 
     # --- 输入处理 ---
 
-    def on_input_submitted(self, event: Input.Submitted):
+    def on_input_submitted(self, event):
         menu = self.query_one("#slash-menu", OptionList)
         if menu.display and menu.highlighted is not None:
             option = menu.get_option_at_index(menu.highlighted)
@@ -353,7 +358,7 @@ class SimpleApp(App):
 
     def _get_slash_commands(self):
         from simple_code.config import load_skills
-        commands = ["/指南", "/模型", "/清空"]
+        commands = ["/指南", "/模型"]
         commands.extend(f"/{name}" for name in sorted(load_skills()))
         return commands
 
@@ -417,7 +422,7 @@ class SimpleApp(App):
         self._accept_slash_option()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected):
-        inp = self.query_one("#input-field", Input)
+        inp = self.query_one("#input-field", PasteInput)
         inp.value = str(event.option.prompt)
         inp.cursor_position = len(inp.value)
         self.query_one("#slash-menu", OptionList).display = False
@@ -427,17 +432,17 @@ class SimpleApp(App):
         menu = self.query_one("#slash-menu", OptionList)
         if menu.highlighted is not None:
             option = menu.get_option_at_index(menu.highlighted)
-            inp = self.query_one("#input-field", Input)
+            inp = self.query_one("#input-field", PasteInput)
             inp.value = str(option.prompt)
             inp.cursor_position = len(inp.value)
         menu.display = False
-        self.query_one("#input-field", Input).focus()
+        self.query_one("#input-field", PasteInput).focus()
 
     # --- 点击时保持输入框焦点 ---
 
     def on_click(self, event):
         """任何点击都把焦点还给输入框，确保拖拽文件等操作正常"""
-        self.query_one("#input-field", Input).focus()
+        self.query_one("#input-field", PasteInput).focus()
 
     # --- 键盘动作 ---
 
@@ -466,7 +471,7 @@ class SimpleApp(App):
 
 
     def _handle_paste_content(self, content):
-        inp = self.query_one("#input-field", Input)
+        inp = self.query_one("#input-field", PasteInput)
         lines = content.count('\n') + 1
 
         if lines < 3 and len(content) <= 150:
@@ -723,7 +728,7 @@ class SimpleApp(App):
         self._inline_result = result
         is_danger = "危险命令" in question or "删除" in question
         color = "bold #ff4444" if is_danger else "bold yellow"
-        self._enqueue(Static(Text(f"AI 提问: {question}", style=color)))
+        self._enqueue(Static(Text(question, style=color)))
         event.wait()
         return result["answer"]
 

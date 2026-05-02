@@ -3,6 +3,6 @@
 from importlib.metadata import version, PackageNotFoundError
 
 try:
-    __version__ = version("simple-code")
+    __version__ = version("simple")
 except PackageNotFoundError:
     __version__ = "dev"

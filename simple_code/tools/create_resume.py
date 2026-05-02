@@ -1,7 +1,6 @@
-"""创建简历：AI 生成 HTML → weasyprint 转 PDF"""
+"""创建简历：AI 生成 HTML → Edge/Chrome/xhtml2pdf 转 PDF"""
 
 import os
-import json
 
 definition = {
     "type": "function",

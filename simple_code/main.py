@@ -16,7 +16,7 @@ from simple_code.config import (
     get_provider, set_provider_key,
     test_provider_key, load_skills, SKILLS_DIR
 )
-from simple_code.chat import build_system_prompt, chat_round, save_memory
+from simple_code.chat import build_system_prompt, chat_round, save_memory, compress_context
 from simple_code.ui import SimpleApp
 from simple_code import state
 
@@ -41,6 +41,11 @@ def main():
     os.makedirs(simple_dir, exist_ok=True)
     os.makedirs(os.path.join(simple_dir, "长期记忆"), exist_ok=True)
 
+    # 本次 session 的长期记忆文件路径（一次启动 = 一个文件）
+    from datetime import datetime
+    session_time = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    session_file = os.path.join(simple_dir, "长期记忆", f"{session_time}.md")
+
     # 兼容旧格式：迁移 simple.md → 短期记忆.md
     old_simple_md = os.path.join(cwd, "simple.md")
     old_simple_md2 = os.path.join(simple_dir, "simple.md")
@@ -57,7 +62,7 @@ def main():
 
 
     messages = [{"role": "system", "content": system_prompt}]
-    token_counter = {"total": 0, "round": 0}
+    token_counter = {"total": 0, "round": 0, "prompt": 0}
     tool_logs = []
 
     def handle_submit(text):
@@ -72,7 +77,6 @@ def main():
             app.write_system("命令:")
             app.write_system("  /指南   显示帮助")
             app.write_system("  /模型   管理模型密钥")
-            app.write_system("  /清空   清空对话历史")
             if skills:
                 app.write_system("")
                 app.write_system("自定义 Skill:")
@@ -99,13 +103,6 @@ def main():
             app.write_system("请使用 /模型 命令管理 API Key")
             return
 
-        if cmd == "/清空":
-            messages.clear()
-            messages.append({"role": "system", "content": system_prompt})
-            token_counter["total"] = 0
-            tool_logs.clear()
-            app.write_system("对话已清空")
-            return
 
         # 自定义 skill
         user_input = text
@@ -147,8 +144,11 @@ def main():
 
         app.stop_thinking()
 
-        if save_memory(client, model_name, simple_dir, user_input, reply, token_counter):
+        if save_memory(client, model_name, simple_dir, session_file, user_input, reply, token_counter):
             app.write_system("记忆已保存")
+
+        if compress_context(client, model_name, messages, token_counter):
+            app.write_system("对话已自动压缩")
 
         elapsed = int(time.time() - task_start_time)
         round_k = f"{token_counter['round'] / 1000:.1f}k"
