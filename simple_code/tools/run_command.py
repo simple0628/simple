@@ -55,11 +55,11 @@ def execute(args, **kwargs):
     if is_dangerous(command):
         if app:
             if not app.request_danger_confirm(command):
-                return "用户取消了操作"
+                return "用户拒绝了此操作，不要再重复尝试相同的命令"
         else:
             user_input = input(f"  危险命令: {command}\n  按回车确认: ")
             if user_input.strip():
-                return "用户取消了操作"
+                return "用户拒绝了此操作，不要再重复尝试相同的命令"
 
     try:
         kwargs_popen = {}
@@ -81,7 +81,7 @@ def execute(args, **kwargs):
                 return "已中断：用户按下 ESC"
             if time.time() - start > TIMEOUT:
                 proc.kill()
-                return f"错误: 命令执行超时（{TIMEOUT}秒），可能是交互式程序，请避免运行需要用户输入的程序"
+                return f"错误: 命令执行超时（{TIMEOUT}秒），该命令可能需要手动输入才能继续"
             time.sleep(0.5)
 
         stdout = proc.stdout.read() if proc.stdout else ""

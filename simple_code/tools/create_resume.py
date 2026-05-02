@@ -87,7 +87,7 @@ def execute(args, app=None, **kwargs):
             return "缺少简历素材（content 参数）"
 
         if app:
-            app.write_tool("正在生成简历 HTML")
+            app.write_tool("正在生成简历")
 
         from openai import OpenAI
         from simple_code.config import get_provider
@@ -129,30 +129,38 @@ def execute(args, app=None, **kwargs):
             except Exception:
                 pass
 
-        # 保存 HTML
-        html_path = path.rsplit(".", 1)[0] + ".html"
+        # 保存临时 HTML（转完 PDF 后删除）
+        import tempfile
+        html_path = os.path.join(tempfile.gettempdir(), "_simple_resume_src.html")
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html)
 
     # HTML → PDF
     if app:
         if html_file:
-            # html_file 模式：没有"生成 HTML"步骤，直接显示转换
             app.write_tool("正在转换为 PDF")
         else:
             app.finish_tool(success=True)
             app.write_tool("正在转换为 PDF")
 
     pdf_ok = _html_to_pdf(html_path, path)
+
+    # 清理临时 HTML（生成模式下）
+    if not html_file and os.path.exists(html_path):
+        try:
+            os.remove(html_path)
+        except Exception:
+            pass
+
     if not pdf_ok:
         if app:
             app.finish_tool(success=False)
-        return f"PDF 转换失败\nHTML 已保存到: {html_path}\n你可以在浏览器中打开 HTML，按 Ctrl+P 打印为 PDF。"
+        return "PDF 生成失败，请重试"
 
     if app:
         app.finish_tool(success=True)
 
-    return f"简历已生成: {path}\nHTML 版本: {html_path}"
+    return f"简历已生成: {path}"
 
 
 def _build_prompt(content, job_description, style, has_photo=False):

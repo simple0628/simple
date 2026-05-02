@@ -247,10 +247,10 @@ def _process_file_paths(user_input, app):
                 result, _ = ocr(path)
                 if result:
                     text = "\n".join(line[1] for line in result)
-                    file_contents.append(f"[图片 OCR: {filename}]\n{text}")
+                    file_contents.append(f"[图片文字识别: {filename}]\n{text}")
                 else:
-                    file_contents.append(f"[图片: {filename}]（OCR 未识别到文字）")
-                app.write_system(f"已 OCR 识别: {filename}")
+                    file_contents.append(f"[图片: {filename}]（未识别到文字）")
+                app.write_system(f"已识别图片文字: {filename}")
             except Exception as e:
                 file_contents.append(f"[图片读取失败: {filename}] {e}")
 

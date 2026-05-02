@@ -137,6 +137,16 @@ class SimpleApp(App):
         border: none;
     }
 
+    #input-field.confirm-mode {
+        background: #000000;
+        color: #ffffff;
+    }
+
+    #input-field.confirm-mode .text-area--cursor {
+        color: transparent;
+        background: transparent;
+    }
+
     """
 
     BINDINGS = [
@@ -170,6 +180,11 @@ class SimpleApp(App):
         self._history_index = 0
         self._history_draft = ""
         self._paste_content = None
+        self._in_confirm_mode = False
+        self._confirm_event = None
+        self._confirm_result = None
+        self._confirm_options = []
+        self._confirm_index = 0
         self.version = ""
         self.cwd = ""
         self.has_memory = False
@@ -323,6 +338,12 @@ class SimpleApp(App):
     # --- 输入处理 ---
 
     def on_input_submitted(self, event):
+        # 确认模式：Enter = 提交选择
+        if self._in_confirm_mode and self._confirm_event and not self._confirm_event.is_set():
+            self._confirm_result["confirmed"] = (self._confirm_index == 1)  # 1 = 允许
+            self._confirm_event.set()
+            return
+
         menu = self.query_one("#slash-menu", OptionList)
         if menu.display and menu.highlighted is not None:
             option = menu.get_option_at_index(menu.highlighted)
@@ -691,7 +712,7 @@ class SimpleApp(App):
             for b in slide["bullets"]:
                 content.append(f"\n  ● {b}", style="#e6edf3")
         if slide.get("notes"):
-            content.append(f"\n\n备注: {slide['notes']}", style="dim")
+            content.append(f"\n\n讲稿: {slide['notes']}", style="dim")
 
         return Panel(
             content,
@@ -733,10 +754,68 @@ class SimpleApp(App):
         return result["answer"]
 
     def request_danger_confirm(self, command):
-        answer = self.request_user_input(
-            f"即将执行危险命令: {command}\n按 Enter 确认，输入任何内容取消"
-        )
-        return answer == "(用户未输入内容)"
+        event = threading.Event()
+        result = {"confirmed": False}
+        self._confirm_event = event
+        self._confirm_result = result
+        self._confirm_options = ["拒绝", "允许"]
+        self._confirm_index = 0  # 默认选中"拒绝"
+
+        # 把命令转成用户能懂的描述
+        import re
+        cmd_lower = command.lower()
+        if re.search(r'\brm\b|\bdel\b|\brd\b|\brmdir\b', cmd_lower):
+            # 提取文件名
+            parts = re.findall(r'"([^"]+)"|(\S+)', command)
+            names = [p[0] or p[1] for p in parts if not re.match(r'^(rm|del|rd|rmdir|/[sqf]|-rf?)', p[0] or p[1], re.I)]
+            import os
+            names = [os.path.basename(n) for n in names if n]
+            desc = "即将删除: " + "、".join(names) if names else "即将删除文件"
+        elif "format" in cmd_lower:
+            desc = "即将格式化磁盘（危险操作）"
+        elif re.search(r'\bdrop\b|\btruncate\b', cmd_lower):
+            desc = "即将删除数据库数据（危险操作）"
+        else:
+            desc = "即将执行可能有风险的操作"
+
+        self._enqueue(Static(Text(desc, style="bold #ff4444")))
+
+        # 把输入框变成上下选择列表
+        def setup_confirm():
+            inp = self.query_one("#input-field", PasteInput)
+            inp.read_only = True
+            inp.show_line_numbers = False
+            inp.cursor_blink = False
+            # 隐藏光标：移到不可见位置
+            inp.add_class("confirm-mode")
+            self._in_confirm_mode = True
+            self._update_confirm_display()
+
+        self.call_from_thread(setup_confirm)
+        event.wait()
+
+        # 先同步清除确认状态（防止下一次 request 进来时状态错乱）
+        self._in_confirm_mode = False
+        confirmed = result["confirmed"]
+
+        # 恢复输入框
+        def restore_input():
+            inp = self.query_one("#input-field", PasteInput)
+            inp.read_only = False
+            inp.cursor_blink = True
+            inp.remove_class("confirm-mode")
+            inp.value = ""
+
+        self.call_from_thread(restore_input)
+        return confirmed
+
+    def _update_confirm_display(self):
+        """更新确认选择列表（上下排列）"""
+        inp = self.query_one("#input-field", PasteInput)
+        idx = self._confirm_index
+        line0 = "❯ 拒绝" if idx == 0 else "  拒绝"
+        line1 = "❯ 允许" if idx == 1 else "  允许"
+        inp.value = f"{line0}\n{line1}"
 
     # --- 状态控制 ---
 

@@ -164,7 +164,25 @@ class PasteInput(TextArea):
     def password(self, v):
         pass  # TextArea 不支持密码模式，忽略
 
+    def check_consume_key(self, key, character):
+        """确认模式下拦截所有按键，阻止 TextArea 的默认绑定"""
+        if hasattr(self.app, '_in_confirm_mode') and self.app._in_confirm_mode:
+            return True
+        return super().check_consume_key(key, character)
+
     async def _on_key(self, event) -> None:
+        # 确认模式：只响应左右和回车
+        if hasattr(self.app, '_in_confirm_mode') and self.app._in_confirm_mode:
+            event.stop()
+            event.prevent_default()
+            if event.key in ("up", "down", "left", "right"):
+                self.app._confirm_index = 1 - self.app._confirm_index
+                self.app._update_confirm_display()
+            elif event.key == "enter":
+                submitted = self.Submitted(input=self, value=self.text)
+                self.app.on_input_submitted(submitted)
+            return
+
         if event.key in ("ctrl+enter", "ctrl+j"):
             # Ctrl+Enter = 换行（手动插入）
             event.stop()

@@ -36,9 +36,11 @@ def build_system_prompt(cwd, platform):
 2. 需要找代码时，用 grep_files 搜索关键词，不要逐个读文件
 3. 修改已有文件用 edit_file，创建新文件用 write_file
 4. 写完代码后主动用 run_command 运行验证
-5. 当用户需求不明确时，必须使用 ask_user 工具向用户提问，不要用普通文字回复来提问
-6. 自定义 Skill 存放在 ~/.simple-code/skills/ 目录下，每个 .md 文件就是一个 skill。用户可以通过 create_skill 工具创建新 skill，也可以用 read_file 读取该目录查看已有的 skill
-7. 创建 PPT 时，必须且只能使用 create_ppt 工具，禁止用 write_file 写脚本。流程：
+   - 当用户拒绝了某个操作时，立即停止，回复"已取消"即可，不要建议用户手动操作，不要用不同的方式重试
+5. 删除文件、执行危险命令时，直接用 run_command 执行即可，不要用 ask_user 提前确认。系统会自动弹出确认选择框让用户决定
+6. 当用户需求不明确时（不包括删除确认），使用 ask_user 工具向用户提问，不要用普通文字回复来提问
+7. 自定义 Skill 存放在 ~/.simple-code/skills/ 目录下，每个 .md 文件就是一个 skill。用户可以通过 create_skill 工具创建新 skill，也可以用 read_file 读取该目录查看已有的 skill
+8. 创建 PPT 时，必须且只能使用 create_ppt 工具，禁止用 write_file 写脚本。流程：
    - 先通过对话了解清楚：主题、是否有资料、页数、风格偏好
    - 如果用户有资料，先用 read_file 读取，或用 read_clipboard 读剪贴板
    - 信息收集完毕后，调用 create_ppt 工具，传入每页的 title、bullets、notes
@@ -46,7 +48,7 @@ def build_system_prompt(cwd, platform):
    - 内容充实：每页至少 3-5 条要点
    - 演讲稿：每页 notes 写 3-5 句口语化演讲稿
    - 页数：一般不少于 6 页
-8. 创建简历时，必须使用 create_resume 工具。流程：
+9. 创建简历时，必须使用 create_resume 工具。流程：
    - 先通过对话收集信息：基本信息、工作经历、项目经历、教育背景、技能
    - 用户可以拖入旧简历或岗位 JD，也可以口述
    - 必须主动询问用户是否有目标岗位 JD，不要自己假设没有
@@ -57,8 +59,7 @@ def build_system_prompt(cwd, platform):
    - 生成后用户可以要求修改，修改后重新调用工具即可
    - 工具内部会自动用 Edge/Chrome 将 HTML 转为 PDF，不要自己用 run_command 转 PDF
    - 不要尝试使用 weasyprint、playwright、pdfkit 等方式转 PDF
-   - 用户要求修改简历时，先用 edit_file 修改 HTML，然后调用 create_resume 的 html_file 参数直接转 PDF
-   - 用户只是要求把现有 HTML 转 PDF 时，直接调用 create_resume，传 html_file 参数即可
+   - 用户要求修改简历时，重新调用 create_resume，传入修改后的素材重新生成
 """
 
 
@@ -134,6 +135,7 @@ def chat_round(client, model_name, messages, app, tool_logs, token_counter, inte
                 for tc in tool_calls_data.values()
             ]})
 
+            user_rejected = False
             for tc in tool_calls_data.values():
                 if interrupt and interrupt.is_set():
                     break
@@ -145,9 +147,19 @@ def chat_round(client, model_name, messages, app, tool_logs, token_counter, inte
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "content": "参数解析失败"
+                        "content": "工具调用出错，请重试"
                     })
                     continue
+
+                # 用户拒绝了某个操作后，跳过后续所有工具
+                if user_rejected:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": "用户已拒绝操作，已跳过"
+                    })
+                    continue
+
                 tip = labels[name](args) if name in labels else f"正在调用 {name}"
                 app.write_tool(tip)
 
@@ -160,6 +172,10 @@ def chat_round(client, model_name, messages, app, tool_logs, token_counter, inte
                 except Exception as e:
                     result = f"错误: {e}"
                     app.finish_tool(success=False)
+
+                # 检测用户是否拒绝了操作
+                if "用户拒绝了" in result:
+                    user_rejected = True
 
                 messages.append({
                     "role": "tool",

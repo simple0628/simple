@@ -68,7 +68,7 @@ def execute(args, app=None, **kwargs):
             if answer.strip().rstrip("。，！.!") not in confirm:
                 return f"用户修改意见: {answer}\n请根据意见修改 pages 内容后重新调用 create_ppt。"
 
-        app.write_tool(f"正在生成 SVG 设计")
+        app.write_tool("正在生成 PPT")
 
     # 调 DeepSeek 生成 SVG
     from openai import OpenAI
@@ -130,7 +130,7 @@ SVG 限制：
 
     if app:
         app.finish_tool(success=True)
-        app.write_tool(f"正在转换 PPTX: {path}")
+        app.write_tool("正在生成 PPT")
 
     # SVG → PPTX
     from simple_code.tools.svg_to_pptx import svgs_to_pptx
