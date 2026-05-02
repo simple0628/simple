@@ -153,17 +153,4 @@ SVG 限制：
             app.finish_tool(success=False)
         return f"PPTX 转换失败: {e}"
 
-    # 记录到 simple-ppt.md
-    try:
-        simple_dir = os.path.join(os.getcwd(), "simple")
-        ppt_md = os.path.join(simple_dir, "simple-ppt.md")
-        from datetime import date
-        first_title = pages[0].get("title", "未知") if pages else "未知"
-        line = f"- {date.today()} | {first_title} | {count}页 | {os.path.basename(path)}\n"
-        if os.path.exists(simple_dir):
-            with open(ppt_md, "a", encoding="utf-8") as f:
-                f.write(line)
-    except Exception:
-        pass
-
     return f"PPT 已创建: {path}（{count} 页，含动画·转场·演讲稿）"

@@ -1,7 +1,8 @@
 """流式对话处理：API 调用、工具调度、记忆保存"""
 
+import os
 import json
-from datetime import date
+from datetime import date, timedelta
 
 from simple_code.tools import definitions, executors, labels
 
@@ -16,8 +17,10 @@ def build_system_prompt(cwd, platform):
 - 用户操作系统: {platform}
 
 ## 工作原则
-- 启动后第一件事：收到用户第一条消息时，先用 read_file 读取当前工作目录下的 simple/simple.md 文件（如果存在），了解项目背景和历史记忆，再回复用户
-- 记忆文件夹：当前工作目录下的 simple/ 文件夹存放各类记忆文件，simple.md 是通用记忆，simple-ppt.md 是 PPT 偏好记忆。创建 PPT 前应先读取 simple-ppt.md 了解用户偏好
+- 记忆系统：当前工作���录下的 simple/ 文件夹存放记忆文件
+  - 短期记忆.md：最近7天的摘要，已加载到上下文中
+  - 长期记忆/ 文件夹：按日期保存的完整记录（格式：YYYY-MM-DD_标题.md），永久保存
+  - 当用户想回忆以前的事时，根据日期用 read_file 或 glob_files 去 simple/长期记忆/ 里查找
 - 当前工作目录优先：所有操作默认在当前工作目录下进行。读文件、搜索、执行命令都应该从当前目录开始，不要去访问其他无关路径
 - 先理解再行动：修改代码前，先用搜索工具了解项目结构，再用读文件查看相关代码
 - 最小改动：只改需要改的地方，用 edit_file 而不是 write_file 来修改现有文件
@@ -43,6 +46,12 @@ def build_system_prompt(cwd, platform):
    - 内容充实：每页至少 3-5 条要点
    - 演讲稿：每页 notes 写 3-5 句口语化演讲稿
    - 页数：一般不少于 6 页
+8. 创建简历时，必须使用 create_resume 工具。流程：
+   - 先通过对话收集信息：基本信息、工作经历、项目经历、教育背景、技能
+   - 用户可以拖入旧简历或岗位 JD，也可以口述
+   - 如果有 JD，根据 JD 优化简历内容（突出相关经验，但不伪造）
+   - 信息足够后调用 create_resume，传入素材和 JD
+   - 生成后用户可以要求修改，修改后重新调用工具即可
 """
 
 
@@ -167,30 +176,108 @@ def chat_round(client, model_name, messages, app, tool_logs, token_counter, inte
         return reply
 
 
-def save_memory(client, model_name, simple_md_path, user_input, reply, token_counter):
-    """判断是否值得记忆，值得则生成一句记忆写入 simple.md"""
+def save_memory(client, model_name, memory_dir, user_input, reply, token_counter):
+    """每次对话都保存：长期记忆（完整）+ 短期记忆（摘要）"""
     try:
+        today = date.today()
+        today_str = today.strftime("%Y-%m-%d")
+
+        # AI 生成摘要和标题
         memory_response = client.chat.completions.create(
             model=model_name,
             messages=[
-                {"role": "system", "content": """判断这轮对话是否值得记忆。
-
-值得记忆的：项目背景、技术决策、用户偏好、重要操作结果、创建/修改/删除了什么文件。
-不值得记忆的：闲聊、打招呼、简单问答、查看帮助、没有实质内容的对话。
-
-如果值得记忆，用一句简短的中文总结这轮对话做了什么，只输出这一句话。
-如果不值得记忆，只输出"跳过"两个字。"""},
-                {"role": "user", "content": f"用户说: {user_input}\nAI回复: {reply[:200]}"}
+                {"role": "system", "content": """为这轮对话生成记忆摘要，按以下格式输出（两行，不要多余内容）：
+标题: 简短标题（用于文件名，如"搜狐调研"、"计算器项目"）
+摘要: 一句话总结这轮对话做了什么"""},
+                {"role": "user", "content": f"用户说: {user_input[:300]}\nAI回复: {reply[:500]}"}
             ]
         )
         if hasattr(memory_response, 'usage') and memory_response.usage:
             token_counter["total"] += memory_response.usage.total_tokens
             token_counter["round"] += memory_response.usage.total_tokens
-        memory_line = memory_response.choices[0].message.content.strip()
-        if memory_line == "跳过":
-            return False
-        with open(simple_md_path, "a", encoding="utf-8") as f:
-            f.write(f"- {memory_line}\n")
+
+        content = memory_response.choices[0].message.content.strip()
+        title, summary = _parse_memory_response(content)
+        if not title:
+            title = "对话记录"
+        if not summary:
+            summary = user_input[:50]
+
+        # 清理文件名中的非法字符
+        title = _sanitize_filename(title)
+
+        # 保存长期记忆（完整记录，永久保存）
+        long_term_dir = os.path.join(memory_dir, "长期记忆")
+        os.makedirs(long_term_dir, exist_ok=True)
+        filename = f"{today_str}_{title}.md"
+        long_term_path = os.path.join(long_term_dir, filename)
+        with open(long_term_path, "a", encoding="utf-8") as f:
+            f.write(f"## {today_str}\n\n")
+            f.write(f"**用户:** {user_input}\n\n")
+            f.write(f"**AI:** {reply}\n\n---\n\n")
+
+        # 保存短期记忆（追加一行摘要）
+        short_term_path = os.path.join(memory_dir, "短期记忆.md")
+        with open(short_term_path, "a", encoding="utf-8") as f:
+            f.write(f"- {today_str} | {summary}\n")
+
+        # 清理 7 天前的短期记忆
+        _clean_short_term_memory(short_term_path, today)
+
         return True
-    except Exception:
+    except Exception as e:
+        # 记忆保存失败时打印错误便于调试
+        import traceback
+        traceback.print_exc()
         return False
+
+
+def _sanitize_filename(name):
+    """清理文件名中的非法字符"""
+    import re
+    # 移除 Windows 文件名非法字符
+    name = re.sub(r'[<>:"/\\|?*]', '', name)
+    # 去除首尾空格和点
+    name = name.strip(' .')
+    # 限制长度
+    return name[:30] if name else "对话记录"
+
+
+def _parse_memory_response(content):
+    """解析 AI 返回的记忆内容，返回 (标题, 摘要)"""
+    title = ""
+    summary = ""
+    for line in content.split("\n"):
+        line = line.strip()
+        if line.startswith("标题:") or line.startswith("标题："):
+            title = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+        elif line.startswith("摘要:") or line.startswith("摘要："):
+            summary = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+    return title, summary
+
+
+def _clean_short_term_memory(path, today):
+    """删除短期记忆中 7 天前的条目"""
+    try:
+        cutoff = today - timedelta(days=7)
+        cutoff_str = cutoff.strftime("%Y-%m-%d")
+
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # 只保留日期 >= cutoff 的行
+        kept = []
+        for line in lines:
+            # 格式: - 2026-05-01 | 摘要
+            stripped = line.strip()
+            if stripped.startswith("- ") and len(stripped) >= 12:
+                date_part = stripped[2:12]
+                if date_part >= cutoff_str:
+                    kept.append(line)
+            elif stripped:
+                kept.append(line)
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(kept)
+    except Exception:
+        pass

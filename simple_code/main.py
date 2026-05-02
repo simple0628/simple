@@ -39,20 +39,22 @@ def main():
     # 记忆文件夹
     simple_dir = os.path.join(cwd, "simple")
     os.makedirs(simple_dir, exist_ok=True)
-    simple_md_path = os.path.join(simple_dir, "simple.md")
-    simple_ppt_path = os.path.join(simple_dir, "simple-ppt.md")
+    os.makedirs(os.path.join(simple_dir, "长期记忆"), exist_ok=True)
 
+    # 兼容旧格式：迁移 simple.md → 短期记忆.md
     old_simple_md = os.path.join(cwd, "simple.md")
-    if os.path.exists(old_simple_md) and not os.path.exists(simple_md_path):
-        os.rename(old_simple_md, simple_md_path)
+    old_simple_md2 = os.path.join(simple_dir, "simple.md")
+    short_term_path = os.path.join(simple_dir, "短期记忆.md")
+    if os.path.exists(old_simple_md) and not os.path.exists(short_term_path):
+        os.rename(old_simple_md, short_term_path)
+    elif os.path.exists(old_simple_md2) and not os.path.exists(short_term_path):
+        os.rename(old_simple_md2, short_term_path)
 
-    if os.path.exists(simple_md_path):
-        with open(simple_md_path, "r", encoding="utf-8") as f:
-            system_prompt += f"\n## 项目记忆\n{f.read()}\n"
+    # 加载短期记忆到系统提示词
+    if os.path.exists(short_term_path):
+        with open(short_term_path, "r", encoding="utf-8") as f:
+            system_prompt += f"\n## 短期记忆（最近7天）\n{f.read()}\n"
 
-    if os.path.exists(simple_ppt_path):
-        with open(simple_ppt_path, "r", encoding="utf-8") as f:
-            system_prompt += f"\n## PPT 偏好记忆\n{f.read()}\n"
 
     messages = [{"role": "system", "content": system_prompt}]
     token_counter = {"total": 0, "round": 0}
@@ -145,7 +147,7 @@ def main():
 
         app.stop_thinking()
 
-        if save_memory(client, model_name, simple_md_path, user_input, reply, token_counter):
+        if save_memory(client, model_name, simple_dir, user_input, reply, token_counter):
             app.write_system("记忆已保存")
 
         elapsed = int(time.time() - task_start_time)
@@ -184,7 +186,7 @@ def main():
     app = SimpleApp(on_submit=submit_in_thread)
     app.version = __version__
     app.cwd = cwd
-    app.has_memory = os.path.exists(simple_md_path)
+    app.has_memory = os.path.exists(short_term_path)
     app.provider_name = provider["name"]
     app.model_name = model_name
     try:
