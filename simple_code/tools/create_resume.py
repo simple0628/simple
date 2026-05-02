@@ -137,8 +137,12 @@ def execute(args, app=None, **kwargs):
 
     # HTML → PDF
     if app:
-        app.finish_tool(success=True)
-        app.write_tool("正在转换为 PDF")
+        if html_file:
+            # html_file 模式：没有"生成 HTML"步骤，直接显示转换
+            app.write_tool("正在转换为 PDF")
+        else:
+            app.finish_tool(success=True)
+            app.write_tool("正在转换为 PDF")
 
     pdf_ok = _html_to_pdf(html_path, path)
     if not pdf_ok:
