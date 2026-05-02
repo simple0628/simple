@@ -62,12 +62,15 @@ def execute(args, **kwargs):
                 return "用户取消了操作"
 
     try:
+        kwargs_popen = {}
         if sys.platform == "win32":
             command = f"chcp 65001 >nul && {command}"
+            kwargs_popen["creationflags"] = subprocess.CREATE_NO_WINDOW
         proc = subprocess.Popen(
             command, shell=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace"
+            text=True, encoding="utf-8", errors="replace",
+            **kwargs_popen
         )
 
         start = time.time()

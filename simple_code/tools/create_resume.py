@@ -19,11 +19,14 @@ definition = {
 
 参数说明：
 - path（必填）：输出文件路径，.pdf 结尾
-- content（必填）：用户的简历素材（经历、技能等原始信息，文本格式）
+- content（必填，除非传了 html_file）：用户的简历素材（经历、技能等原始信息，文本格式）
 - job_description（可选）：目标岗位 JD，AI 会据此优化简历内容
 - style（可选）：风格偏好，如"简约"、"专业"、"创意"等，默认"专业"
+- html_file（可选）：已有的 HTML 简历文件路径，传了则跳过 AI 生成，直接转 PDF
 
-工具会调用 AI 生成完整 HTML 简历并转为 PDF。""",
+两种用法：
+1. 从素材生成：传 content → AI 生成 HTML → 转 PDF
+2. 直接转换：传 html_file → 跳过 AI → 直接转 PDF""",
         "parameters": {
             "type": "object",
             "properties": {
@@ -31,90 +34,95 @@ definition = {
                 "content": {"type": "string", "description": "用户简历素材（经历、技能等）"},
                 "job_description": {"type": "string", "description": "目标岗位 JD（可选）"},
                 "style": {"type": "string", "description": "风格偏好（可选）"},
+                "html_file": {"type": "string", "description": "已有的 HTML 文件路径，直接转 PDF"},
             },
-            "required": ["path", "content"],
+            "required": ["path"],
         },
     },
 }
 
 
 def label(args):
-    return f"正在生成简历: {args.get('path', '')}"
+    return f"正在生成简历"
 
 
 def execute(args, app=None, **kwargs):
     path = args["path"]
-    content = args["content"]
-    job_description = args.get("job_description", "")
-    style = args.get("style", "专业")
+    html_file = args.get("html_file", "")
 
     # 确保输出目录存在
     out_dir = os.path.dirname(path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    # 调 AI 生成 HTML 简历
-    if app:
-        app.finish_tool(success=True)
-        app.write_tool("正在生成简历 HTML")
+    # 模式1：直接转已有 HTML
+    if html_file:
+        if not os.path.exists(html_file):
+            if app:
+                app.finish_tool(success=False)
+            return f"文件不存在: {html_file}"
 
-    from openai import OpenAI
-    from simple_code.config import get_provider
+        html_path = html_file
+    else:
+        # 模式2：AI 生成 HTML
+        content = args.get("content", "")
+        job_description = args.get("job_description", "")
+        style = args.get("style", "专业")
 
-    provider = get_provider()
-    client = OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
+        if not content:
+            if app:
+                app.finish_tool(success=False)
+            return "缺少简历素材（content 参数）"
 
-    prompt = _build_prompt(content, job_description, style)
-
-    try:
-        response = client.chat.completions.create(
-            model=provider["model"],
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": "请根据以上信息生成完整的 HTML 简历代码。只输出 HTML 代码，不要任何解释。"},
-            ],
-        )
-        html = response.choices[0].message.content.strip()
-
-        # 清理可能的 markdown 代码块包裹
-        if html.startswith("```"):
-            lines = html.split("\n")
-            # 去掉首行 ```html 和末行 ```
-            lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            html = "\n".join(lines)
-
-    except Exception as e:
         if app:
-            app.finish_tool(success=False)
-        return f"AI 生成失败: {e}"
+            app.write_tool("正在生成简历 HTML")
 
-    # 保存 HTML（调试用，和 PDF 同名）
-    html_path = path.rsplit(".", 1)[0] + ".html"
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(html)
+        from openai import OpenAI
+        from simple_code.config import get_provider
+
+        provider = get_provider()
+        client = OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
+
+        prompt = _build_prompt(content, job_description, style)
+
+        try:
+            response = client.chat.completions.create(
+                model=provider["model"],
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": "请根据以上信息生成完整的 HTML 简历代码。只输出 HTML 代码，不要任何解释。"},
+                ],
+            )
+            html = response.choices[0].message.content.strip()
+
+            # 清理可能的 markdown 代码块包裹
+            if html.startswith("```"):
+                lines = html.split("\n")
+                lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                html = "\n".join(lines)
+
+        except Exception as e:
+            if app:
+                app.finish_tool(success=False)
+            return f"AI 生成失败: {e}"
+
+        # 保存 HTML
+        html_path = path.rsplit(".", 1)[0] + ".html"
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html)
 
     # HTML → PDF
     if app:
+        app.finish_tool(success=True)
         app.write_tool("正在转换为 PDF")
 
-    try:
-        from weasyprint import HTML
-        HTML(string=html).write_pdf(path)
-    except ImportError:
+    pdf_ok = _html_to_pdf(html_path, path)
+    if not pdf_ok:
         if app:
             app.finish_tool(success=False)
-        return (
-            f"PDF 转换需要 weasyprint 库，请运行以下命令安装：\n"
-            f"  pip install weasyprint\n\n"
-            f"HTML 简历已保存到: {html_path}\n"
-            f"你可以在浏览器中打开 HTML，按 Ctrl+P 打印为 PDF。"
-        )
-    except Exception as e:
-        if app:
-            app.finish_tool(success=False)
-        return f"PDF 转换失败: {e}\nHTML 已保存到: {html_path}\n你可以在浏览器中打开 HTML，按 Ctrl+P 打印为 PDF。"
+        return f"PDF 转换失败\nHTML 已保存到: {html_path}\n你可以在浏览器中打开 HTML，按 Ctrl+P 打印为 PDF。"
 
     if app:
         app.finish_tool(success=True)
@@ -149,24 +157,144 @@ def _build_prompt(content, job_description, style):
 - 风格：{style}
 - 输出完整的 HTML 文件（包含 <!DOCTYPE html>、<html>、<head>、<body>）
 - 所有样式用内联 CSS 或 <style> 标签，不依赖外部文件
-- 字体使用 "Microsoft YaHei", "SimHei", sans-serif
+- 字体使用 "SimSun", "Microsoft YaHei", sans-serif
 - 页面宽度适合 A4 打印（210mm），合理设置 margin 和 padding
 - 排版清晰专业，适合 HR 阅读
 - 中文内容为主
 
-## 简历结构建议
-- 顶部：姓名 + 联系方式（手机/邮箱/GitHub 等）
-- 求职意向（如果有 JD）
-- 工作经历（倒序，突出成果和数字）
-- 项目经历（技术栈 + 成果）
-- 教育背景
-- 技能清单
+## CSS 限制（重要！必须遵守）
+- 禁止使用 flexbox（display: flex）
+- 禁止使用 grid（display: grid）
+- 布局只用 table 或普通 block/inline 元素
+- 日期右对齐用 float: right 或 table 两列实现
+- 只用基础 CSS：margin、padding、border、font-size、color、font-weight、text-align、width
+- 不用 position: absolute/fixed
+- body 背景必须是白色（#ffffff），不要灰色背景
+- 不要 box-shadow、不要卡片式设计
+- 简历直接铺满页面，不要居中的"纸张"容器
+- 不要用 emoji 符号，用纯文字
+- 内容必须紧凑，确保在一页 A4 内完成，不要留大量空白
+- 禁止设置 min-height（会导致 PDF 出现多余空白页）
+- body 的 padding 不要超过 15mm
+
+## 简历内容规范
+
+### 核心原则（FAB 模式）
+- Feature（做了什么）→ Advantage（比别人好在哪）→ Benefit（给雇主带来什么价值）
+- 提供论据而非论点，让数据说话，避免"学习能力强"等空话
+
+### 模块顺序
+1. 顶部：姓名 + 联系方式（手机/邮箱/微信等）
+2. 求职意向（如果有 JD）
+3. 工作经历（按时间倒序）
+4. 项目经历（成果 + 量化数据）
+5. 教育背景
+6. 技能/证书/特长
+
+### 经历描述规范（极其重要）
+每段经历必须回答：我负责了什么 → 我的独特贡献 → 量化结果
+- 必须有数字：业绩增长百分比、用户量、营收、成本降低、效率提升等
+- 格式：「做了什么 → 采取什么方法/策略 → 达到什么效果（数字）」
+- 技术岗示例：「设计 Redis 缓存方案，接口响应从 1200ms 降至 40ms」
+- 运营岗示例：「策划618活动，单日 GMV 突破 500 万，同比增长 120%」
+- 销售岗示例：「负责华东区大客户，年度签约金额 2000 万，超额完成 150%」
+- 设计岗示例：「主导品牌视觉升级，官网转化率提升 35%」
+
+### 禁忌
+- 不要写主观自我评价（如"热爱学习"、"抗压能力强"、"团队精神"）
+- 不要堆砌职责描述而无实际成果
+- 不要写与目标岗位无关的经历
+- 不要伪造数据和经验
+- 如果用户提供的信息缺少数字，可以合理润色但不能编造
 
 ## 排版规范
+- 整体控制在 1 页 A4 纸（经验丰富最多 2 页）
 - 标题和正文层次分明
-- 适当使用分割线
-- 关键信息加粗
-- 日期右对齐
-- 整体控制在 1-2 页 A4 纸
+- 适当使用分割线区分模块
+- 关键信息（公司名、职位、核心技能）加粗
+- 日期右对齐，格式统一（YYYY.MM - YYYY.MM）
+- 技能/证书按相关性排序，最匹配岗位的放前面
 
 只输出 HTML 代码，不要解释。"""
+
+
+def _html_to_pdf(html_path, pdf_path):
+    """HTML 转 PDF：优先用 Edge/Chrome 命令行，fallback 到 xhtml2pdf"""
+    import subprocess
+    import shutil
+    import tempfile
+
+    # 转为绝对路径
+    html_path = os.path.abspath(html_path)
+    pdf_path = os.path.abspath(pdf_path)
+
+    # 用临时文件避免中文路径问题
+    temp_html = os.path.join(tempfile.gettempdir(), "_simple_resume.html")
+    temp_pdf = os.path.join(tempfile.gettempdir(), "_simple_resume.pdf")
+    shutil.copy2(html_path, temp_html)
+
+    # 方案1：尝试 Edge（Windows 自带）
+    edge_paths = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    for edge in edge_paths:
+        if os.path.exists(edge):
+            try:
+                file_url = f"file:///{temp_html.replace(os.sep, '/')}"
+                subprocess.run(
+                    [edge, "--headless", "--disable-gpu", "--no-pdf-header-footer",
+                     f"--print-to-pdf={temp_pdf}", file_url],
+                    capture_output=True, timeout=30
+                )
+                if os.path.exists(temp_pdf) and os.path.getsize(temp_pdf) > 0:
+                    shutil.move(temp_pdf, pdf_path)
+                    os.remove(temp_html)
+                    return True
+            except Exception:
+                pass
+            break
+
+    # 方案2：尝试 Chrome
+    chrome_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    chrome = shutil.which("chrome") or shutil.which("google-chrome")
+    if chrome:
+        chrome_paths.insert(0, chrome)
+
+    for chrome in chrome_paths:
+        if os.path.exists(chrome):
+            try:
+                file_url = f"file:///{temp_html.replace(os.sep, '/')}"
+                subprocess.run(
+                    [chrome, "--headless", "--disable-gpu", "--no-pdf-header-footer",
+                     f"--print-to-pdf={temp_pdf}", file_url],
+                    capture_output=True, timeout=30
+                )
+                if os.path.exists(temp_pdf) and os.path.getsize(temp_pdf) > 0:
+                    shutil.move(temp_pdf, pdf_path)
+                    os.remove(temp_html)
+                    return True
+            except Exception:
+                pass
+            break
+
+    # 清理临时文件
+    if os.path.exists(temp_html):
+        os.remove(temp_html)
+
+    # 方案3：fallback 到 xhtml2pdf
+    try:
+        from xhtml2pdf import pisa
+        with open(html_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        with open(pdf_path, "wb") as pdf_file:
+            status = pisa.CreatePDF(html, dest=pdf_file)
+        if not status.err:
+            return True
+    except Exception:
+        pass
+
+    return False

@@ -136,7 +136,7 @@ class SimpleApp(App):
 
     BINDINGS = [
         Binding("escape", "interrupt", "中断", show=False),
-        Binding("ctrl+c", "copy_or_quit", "复制/退出", show=False),
+        Binding("ctrl+c", "copy_or_quit", "复制/退出", show=False, priority=True),
         Binding("tab", "complete_slash", "补全", show=False),
         Binding("ctrl+v", "smart_paste", "粘贴", show=False, priority=True),
         Binding("pageup", "scroll_up_page", "上翻", show=False),
@@ -474,9 +474,13 @@ class SimpleApp(App):
             inp.cursor_position = pos + len(content)
         else:
             self._paste_content = content
+            existing = inp.value.strip()
             summary = f"[已粘贴 ~{lines} 行] "
-            inp.value = summary
-            inp.cursor_position = len(summary)
+            if existing:
+                inp.value = existing + " " + summary
+            else:
+                inp.value = summary
+            inp.cursor_position = len(inp.value)
 
     def action_copy_or_quit(self):
         selected = self.screen.get_selected_text()
@@ -541,7 +545,6 @@ class SimpleApp(App):
     def write_tool_preparing(self, tool_name):
         display = self._TOOL_NAME_MAP.get(tool_name, tool_name)
         msg = Text()
-        msg.append("  ")
         msg.append(display, style="bold white")
         msg.append("...", style="#8b949e")
         w = Static(msg)
@@ -550,7 +553,6 @@ class SimpleApp(App):
 
     def write_tool(self, text):
         msg = Text()
-        msg.append("  ")
         parts = text.split(" ", 1)
         msg.append(parts[0], style="bold white")
         if len(parts) > 1:
@@ -573,7 +575,6 @@ class SimpleApp(App):
             return
         text = self._current_tool_text
         msg = Text()
-        msg.append("  ")
         parts = text.split(" ", 1)
         color = "bold #00cc66" if success else "bold #ff4444"
         msg.append(parts[0], style=color)

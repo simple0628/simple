@@ -49,9 +49,15 @@ def build_system_prompt(cwd, platform):
 8. 创建简历时，必须使用 create_resume 工具。流程：
    - 先通过对话收集信息：基本信息、工作经历、项目经历、教育背景、技能
    - 用户可以拖入旧简历或岗位 JD，也可以口述
+   - 必须主动询问用户是否有目标岗位 JD，不要自己假设没有
+   - 必须询问用户偏好的简历风格
    - 如果有 JD，根据 JD 优化简历内容（突出相关经验，但不伪造）
-   - 信息足够后调用 create_resume，传入素材和 JD
+   - 所有信息确认后再调用 create_resume，传入素材和 JD
    - 生成后用户可以要求修改，修改后重新调用工具即可
+   - 工具内部会自动用 Edge/Chrome 将 HTML 转为 PDF，不要自己用 run_command 转 PDF
+   - 不要尝试使用 weasyprint、playwright、pdfkit 等方式转 PDF
+   - 用户要求修改简历时，先用 edit_file 修改 HTML，然后调用 create_resume 的 html_file 参数直接转 PDF
+   - 用户只是要求把现有 HTML 转 PDF 时，直接调用 create_resume，传 html_file 参数即可
 """
 
 
