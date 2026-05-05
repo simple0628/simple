@@ -11,3 +11,5 @@ simple/
 *.pptx
 ~$*
 node_modules/
+upload.py
+.env

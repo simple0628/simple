@@ -504,7 +504,47 @@ class SvgConverter:
 #  动画 & 转场 XML 生成（参考 ppt-master）
 # ============================================================
 
-from simple_code.tools.ppt_frameworks import ENTRANCE_ANIMATIONS, ENTRANCE_MIXED_POOL, TRANSITIONS
+TRANSITIONS = {
+    "fade":    {"name": "淡入淡出", "duration_ms": 700, "element": "fade",    "attrs": {}},
+    "push":    {"name": "推入",     "duration_ms": 500, "element": "push",    "attrs": {"dir": "r"}},
+    "wipe":    {"name": "擦除",     "duration_ms": 400, "element": "wipe",    "attrs": {"dir": "r"}},
+    "split":   {"name": "拆分",     "duration_ms": 500, "element": "split",   "attrs": {"orient": "horz", "dir": "out"}},
+    "strips":  {"name": "条纹",     "duration_ms": 500, "element": "strips",  "attrs": {"dir": "rd"}},
+    "cover":   {"name": "覆盖",     "duration_ms": 500, "element": "cover",   "attrs": {"dir": "r"}},
+    "random":  {"name": "随机",     "duration_ms": 500, "element": "random",  "attrs": {}},
+    "none":    {"name": "无转场",   "duration_ms": 0,   "element": None,      "attrs": {}},
+}
+
+ENTRANCE_ANIMATIONS = {
+    "appear":       {"name": "出现",     "filter": None,                    "presetID": 1,  "presetSub": 0},
+    "fade":         {"name": "淡入",     "filter": "fade",                  "presetID": 10, "presetSub": 0},
+    "fly":          {"name": "飞入",     "filter": "slide(fromBottom)",     "presetID": 2,  "presetSub": 4},
+    "cut":          {"name": "切入",     "filter": "slide(fromLeft)",       "presetID": 42, "presetSub": 8},
+    "zoom":         {"name": "缩放",     "filter": "image",                 "presetID": 23, "presetSub": 0},
+    "wipe":         {"name": "擦除",     "filter": "wipe(left)",            "presetID": 22, "presetSub": 1},
+    "split":        {"name": "拆分",     "filter": "barn(inVertical)",      "presetID": 16, "presetSub": 21},
+    "blinds":       {"name": "百叶窗",   "filter": "blinds(horizontal)",    "presetID": 3,  "presetSub": 10},
+    "checkerboard": {"name": "棋盘格",   "filter": "checkerboard(across)",  "presetID": 5,  "presetSub": 6},
+    "dissolve":     {"name": "溶解",     "filter": "dissolve",              "presetID": 9,  "presetSub": 0},
+    "random_bars":  {"name": "随机线条", "filter": "randombar(horizontal)", "presetID": 14, "presetSub": 10},
+    "peek":         {"name": "窥视",     "filter": "wipe(down)",            "presetID": 12, "presetSub": 4},
+    "wheel":        {"name": "轮子",     "filter": "wheel(4)",              "presetID": 21, "presetSub": 0},
+    "box":          {"name": "盒状",     "filter": "box(in)",               "presetID": 4,  "presetSub": 0},
+    "circle":       {"name": "圆形",     "filter": "circle(in)",            "presetID": 6,  "presetSub": 0},
+    "diamond":      {"name": "菱形",     "filter": "diamond(in)",           "presetID": 8,  "presetSub": 0},
+    "plus":         {"name": "十字",     "filter": "plus(in)",              "presetID": 13, "presetSub": 0},
+    "strips":       {"name": "条纹",     "filter": "strips(downRight)",     "presetID": 18, "presetSub": 12},
+    "wedge":        {"name": "楔形",     "filter": "wedge",                 "presetID": 20, "presetSub": 0},
+    "stretch":      {"name": "伸展",     "filter": "stretch(across)",       "presetID": 17, "presetSub": 0},
+    "expand":       {"name": "展开",     "filter": "stretch(across)",       "presetID": 50, "presetSub": 0},
+    "swivel":       {"name": "旋转",     "filter": "wheel(1)",              "presetID": 19, "presetSub": 0},
+}
+
+ENTRANCE_MIXED_POOL = [
+    "blinds", "checkerboard", "dissolve", "fly", "cut",
+    "random_bars", "box", "split", "strips", "wedge", "wheel",
+    "wipe", "expand", "fade", "swivel", "zoom",
+]
 
 
 def _pick_effect(mode, idx, offset=0):
