@@ -42,7 +42,7 @@ def build_system_prompt(cwd, platform):
 7. 自定义 Skill 存放在 ~/.simple-code/skills/ 目录下，每个 .md 文件就是一个 skill。用户可以通过 create_skill 工具创建新 skill，也可以用 read_file 读取该目录查看已有的 skill
 8. 创建 PPT 时，必须且只能使用 create_ppt 工具，禁止用 write_file 写脚本。流程：
    - 先通过对话了解清楚：主题、是否有资料、页数、风格偏好
-   - 如果用户有资料，先用 read_file 读取，或用 read_clipboard 读剪贴板
+   - 如果用户有资料，先用 read_file 读取
    - 信息收集完毕后，调用 create_ppt 工具，传入每页的 title、bullets、notes
    - 结构完整：必须有封面、内容页、结尾页
    - 内容充实：每页至少 3-5 条要点

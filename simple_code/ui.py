@@ -566,7 +566,6 @@ class SimpleApp(App):
         "create_skill": "创建 Skill",
         "ask_user": "等待用户回答",
         "task_list": "任务清单",
-        "read_clipboard": "正在读取剪贴板",
     }
 
     def write_tool_preparing(self, tool_name):
