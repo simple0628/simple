@@ -19,7 +19,7 @@
 ## 安装
 
 ```bash
-pip install simple-code
+pip install jiandanai
 ```
 
 需要 Python >= 3.9。首次启动会引导你配置 DeepSeek API Key。
