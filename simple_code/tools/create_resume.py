@@ -36,6 +36,7 @@ definition = {
                 "style": {"type": "string", "description": "风格偏好（可选）"},
                 "html_file": {"type": "string", "description": "已有的 HTML 文件路径，直接转 PDF"},
                 "photo": {"type": "string", "description": "一寸照片路径（jpg/png）"},
+                "photo_position": {"type": "string", "description": "照片位置：left（左上，默认）或 right（右上）"},
             },
             "required": ["path"],
         },
@@ -96,7 +97,8 @@ def execute(args, app=None, **kwargs):
         client = OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
 
         has_photo = bool(photo and os.path.exists(photo))
-        prompt = _build_prompt(content, job_description, style, has_photo)
+        photo_position = args.get("photo_position", "left")
+        prompt = _build_prompt(content, job_description, style, has_photo, photo_position)
 
         try:
             response = client.chat.completions.create(
@@ -129,9 +131,11 @@ def execute(args, app=None, **kwargs):
             except Exception:
                 pass
 
-        # 保存临时 HTML（转完 PDF 后删除）
-        import tempfile
-        html_path = os.path.join(tempfile.gettempdir(), "_simple_resume_src.html")
+        # 保存 HTML 草稿（供后续修改使用，不自动删除）
+        draft_dir = os.path.join(os.path.dirname(path) or ".", "simple", "草稿")
+        os.makedirs(draft_dir, exist_ok=True)
+        draft_name = os.path.splitext(os.path.basename(path))[0] + ".html"
+        html_path = os.path.join(draft_dir, draft_name)
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html)
 
@@ -145,13 +149,6 @@ def execute(args, app=None, **kwargs):
 
     pdf_ok = _html_to_pdf(html_path, path)
 
-    # 清理临时 HTML（生成模式下）
-    if not html_file and os.path.exists(html_path):
-        try:
-            os.remove(html_path)
-        except Exception:
-            pass
-
     if not pdf_ok:
         if app:
             app.finish_tool(success=False)
@@ -160,20 +157,32 @@ def execute(args, app=None, **kwargs):
     if app:
         app.finish_tool(success=True)
 
-    return f"简历已生成: {path}"
+    result = f"简历已生成: {path}"
+    if not html_file:
+        result += f"\nHTML 草稿已保存: {html_path}"
+    return result
 
 
-def _build_prompt(content, job_description, style, has_photo=False):
+def _build_prompt(content, job_description, style, has_photo=False, photo_position="left"):
     """构建生成简历 HTML 的 prompt"""
 
     photo_section = ""
     if has_photo:
-        photo_section = """
+        if photo_position == "right":
+            photo_section = """
 ## 照片要求
 - 在简历顶部右侧放置一寸照片
 - 使用 <img> 标签，src 属性写 {{PHOTO_DATA_URI}}（程序会自动替换为实际图片）
 - 照片尺寸：宽 90px，高 120px
 - 照片和姓名/联系方式用 table 实现左右布局（姓名左边，照片右边）
+"""
+        else:
+            photo_section = """
+## 照片要求
+- 在简历顶部左侧放置一寸照片
+- 使用 <img> 标签，src 属性写 {{PHOTO_DATA_URI}}（程序会自动替换为实际图片）
+- 照片尺寸：宽 90px，高 120px
+- 照片和姓名/联系方式用 table 实现左右布局（照片左边，姓名右边）
 """
 
     jd_section = ""

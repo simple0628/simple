@@ -77,9 +77,9 @@ def execute(args, app=None, **kwargs):
     provider = get_provider()
     client = OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
 
-    svg_prompt = """你是 PPT 设计大师。根据每页内容生成 SVG。
+    svg_prompt = """你是顶级 PPT 视觉设计师。根据每页内容生成精美的 SVG 幻灯片。
 
-SVG 限制：
+SVG 元素限制：
 1. viewBox="0 0 1280 720"，font-family="Microsoft YaHei"
 2. 只用：rect, text, tspan, circle, ellipse, line, path, polygon, linearGradient
 3. 禁止：style标签, class, foreignObject, image, mask, use, symbol
@@ -87,7 +87,21 @@ SVG 限制：
 5. 颜色用 #RRGGBB，透明度用 fill-opacity
 6. 所有页面保持统一配色和装饰风格
 
-输出 JSON（只输出 JSON）：
+文字安全规则（违反即失败）：
+1. 所有文字必须在 x=80 到 x=1200、y=40 到 y=680 范围内
+2. 中文字符宽度约等于 font-size，英文/数字约 font-size×0.6。一行文字总宽度不得超过 1120px
+3. 超长文本必须拆成多行，用多个 <text> 元素
+
+设计要求（非常重要）：
+1. 封面页：大标题居中，副信息分散排列，加装饰线条和几何图形
+2. 数据指标页：用数据卡片展示关键数字，大号数字+小号说明，横向排列。不要用纯列表
+3. 内容页（5条以下）：用带圆角的卡片+图标色块排列，左右分栏或网格布局
+4. 内容页（6条以上）：可以用双栏布局，左右各放一半内容
+5. 每页必须有装饰元素：渐变色块、半透明几何图形、线条分隔、光晕效果等
+6. 标题区要有设计感：色条、下划线、背景色块等，不要只是纯文字
+7. 页面要饱满，内容和装饰要充分利用整个 1280×720 空间，不要留大片空白
+
+输出 JSON（只输出 JSON，不要```包裹）：
 {"pages": [{"svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"}, ...]}"""
 
     pages_json = json.dumps(pages, ensure_ascii=False)
@@ -102,7 +116,7 @@ SVG 限制：
                 {"role": "system", "content": svg_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=16000,
+            max_tokens=65536,
         )
         content = resp.choices[0].message.content.strip()
 
@@ -130,7 +144,17 @@ SVG 限制：
 
     if app:
         app.finish_tool(success=True)
-        app.write_tool("正在生成 PPT")
+
+    # 保存 SVG 草稿（供后续修改使用，不自动删除）
+    draft_dir = os.path.join(os.path.dirname(path) or ".", "simple", "草稿")
+    os.makedirs(draft_dir, exist_ok=True)
+    draft_name = os.path.splitext(os.path.basename(path))[0] + "_svg.json"
+    draft_path = os.path.join(draft_dir, draft_name)
+    try:
+        with open(draft_path, "w", encoding="utf-8") as f:
+            json.dump({"pages": svg_pages}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        draft_path = ""
 
     # SVG → PPTX
     from simple_code.tools.svg_to_pptx import svgs_to_pptx
@@ -164,4 +188,6 @@ SVG 限制：
     result = f"PPT 已创建: {path}（{count} 页，含动画·转场）"
     if notes_path:
         result += f"\n演讲稿: {notes_path}"
+    if draft_path:
+        result += f"\nSVG 草稿已保存: {draft_path}"
     return result

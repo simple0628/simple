@@ -151,7 +151,7 @@ def _text_shape_xml(shape_id, off_x, off_y, cx, cy, runs_xml, algn="l", rot=0):
         f'<a:noFill/><a:ln><a:noFill/></a:ln>'
         f'</p:spPr>'
         f'<p:txBody>'
-        f'<a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" anchorCtr="0">'
+        f'<a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" anchorCtr="0">'
         f'<a:spAutoFit/></a:bodyPr>'
         f'<a:lstStyle/>'
         f'<a:p><a:pPr algn="{algn}"/>{runs_xml}</a:p>'
